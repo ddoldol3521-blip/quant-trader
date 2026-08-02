@@ -6,4 +6,5 @@ venv/
 .env
 telegram_config.json
 notify_schedule.json
+jongsa_positions.json
 charts/
