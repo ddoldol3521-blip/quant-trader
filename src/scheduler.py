@@ -37,13 +37,16 @@ def _run(cmd: list):
     return subprocess.run(cmd, capture_output=True, text=True, encoding="cp949", errors="replace")
 
 
-def register_windows_task(time_str: str, market: str, limit: int, min_match: int) -> None:
+def register_windows_task(time_str: str, market: str, limit: int, min_match: int, region: str = "한국") -> None:
     """매일 지정 시간에 실행되는 스캔+알림 작업을 등록한다 (이미 있으면 갱신).
 
     time_str: "HH:MM" 형식
     """
     script_path = PROJECT_ROOT / "scripts" / "daily_scan_notify.py"
-    tr = f'"{_python_exe()}" "{script_path}" --market {market} --limit {limit} --min-match {min_match}'
+    tr = (
+        f'"{_python_exe()}" "{script_path}" --market {market} --region {region} '
+        f"--limit {limit} --min-match {min_match}"
+    )
 
     cmd = ["schtasks", "/create", "/tn", TASK_NAME, "/tr", tr, "/sc", "daily", "/st", time_str, "/f"]
     result = _run(cmd)

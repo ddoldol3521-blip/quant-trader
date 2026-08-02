@@ -8,10 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pandas as pd
 import streamlit as st
 
+from src import markets as market_api
 from src.backtest.engine import run_backtest
 from src.charts import equity_curve_figure
 from src.data.kr_data import get_kr_ohlcv, resample_ohlcv
-from src.data.kr_universe import get_full_listing
 from src.interactive_chart import AVAILABLE_OSCILLATORS, build_price_chart, strategy_chart_config
 from src.market_dashboard import get_dashboard, get_put_call_ratio
 from src.optimization import optimize_strategy
@@ -35,7 +35,30 @@ from src.telegram_notify import (
 from src.validation import collect_agreement_events, compute_baseline, summarize_agreement
 
 st.set_page_config(page_title="퀀트 트레이더", layout="wide")
-st.title("퀀트 트레이더")
+
+head_col1, head_col2 = st.columns([2, 3])
+with head_col1:
+    st.title("퀀트 트레이더")
+with head_col2:
+    REGION = st.radio(
+        "어느 시장을 볼까요?",
+        market_api.REGIONS,
+        horizontal=True,
+        key="region",
+        format_func=lambda r: f"🇰🇷 {r} 주식" if r == market_api.KR else f"🇺🇸 {r} 주식",
+    )
+
+MI = market_api.info(REGION)
+SUB_MARKETS = MI["sub_markets"]
+DEFAULT_SUB = MI["default_sub_markets"]
+CURRENCY = MI["currency"]
+IS_KR = REGION == market_api.KR
+
+st.caption(
+    f"지금 **{REGION} 주식** 기준으로 보고 있습니다. "
+    f"위에서 시장을 바꾸면 아래 모든 탭(종목 검색·차트·백테스트·스캔)이 그 시장으로 전환됩니다. "
+    f"({MI['universe_note']})"
+)
 
 STRATEGY_NAMES = list(STRATEGIES.keys())
 CHART_CONFIG = {"scrollZoom": True}
@@ -100,6 +123,22 @@ def render_strategy_info(strategy_name):
         st.caption(module.DESCRIPTION)
         return
     st.caption(f"**{strategy_name}** ({type_label}) — 🟢 살 때: {buy_cond} / 🔴 팔 때: {sell_cond}")
+
+
+def render_universe_note(sub_markets, limit):
+    """선택한 시장이 어떤 순서로 잘리는지 알려준다.
+
+    S&P500은 알파벳순이라 '상위 N개'가 규모 상위가 아니다 — 이걸 모르면 결과를 오해한다.
+    """
+    if not sub_markets:
+        return
+    st.caption(f"정렬 순서 — {market_api.ordering_note(sub_markets)}")
+    if market_api.has_alpha_ordering(sub_markets) and limit < 503:
+        st.warning(
+            f"⚠️ S&P500은 **알파벳순**이라 '상위 {limit}개'는 규모 상위가 아니라 "
+            f"**A로 시작하는 회사 {limit}개**에 가깝습니다. 500개 전부를 보려면 개수를 최대로 올리거나, "
+            "규모 순으로 보고 싶으면 NASDAQ·NYSE를 선택하세요."
+        )
 
 
 def render_take_profit_controls(prefix: str):
@@ -211,21 +250,22 @@ with tab_guide:
 
 # ---------------------------------------------------------------- 종목 목록
 with tab_stocks:
-    st.subheader("종목 코드 찾기")
-    st.caption("종목코드를 몰라도 이름으로 검색해서 찾을 수 있습니다. 시가총액 순으로 나옵니다.")
+    st.subheader(f"{REGION} 종목 찾기")
+    st.caption(f"코드를 몰라도 이름으로 검색할 수 있습니다. {MI['universe_note']}")
 
-    stock_markets = st.multiselect("시장", ["KOSPI", "KOSDAQ"], default=["KOSPI", "KOSDAQ"], key="stock_markets")
+    stock_markets = st.multiselect("시장", SUB_MARKETS, default=DEFAULT_SUB, key=f"stock_markets_{REGION}")
 
-    if "full_listing" not in st.session_state:
-        st.session_state["full_listing"] = None
+    listing_key = f"full_listing_{REGION}"
+    if listing_key not in st.session_state:
+        st.session_state[listing_key] = None
 
-    if st.button("종목 목록 불러오기", key="stocks_load") or st.session_state["full_listing"] is not None:
-        if st.session_state["full_listing"] is None:
+    if st.button("종목 목록 불러오기", key=f"stocks_load_{REGION}") or st.session_state[listing_key] is not None:
+        if st.session_state[listing_key] is None:
             with st.spinner("종목 목록 불러오는 중..."):
-                st.session_state["full_listing"] = get_full_listing(stock_markets)
+                st.session_state[listing_key] = market_api.get_full_listing(REGION, stock_markets)
 
-        listing = st.session_state["full_listing"]
-        search = st.text_input("종목명 또는 코드 검색 (예: 삼성전자, 005930)", key="stock_search")
+        listing = st.session_state[listing_key]
+        search = st.text_input(MI["search_hint"], key=f"stock_search_{REGION}")
 
         display_df = listing.copy()
         if search:
@@ -236,9 +276,11 @@ with tab_stocks:
 
         display_df = display_df.rename(
             columns={
-                "Code": "종목코드",
+                "Code": "종목코드" if IS_KR else "티커",
                 "Name": "종목명",
                 "Market": "시장",
+                "Sector": "섹터",
+                "Industry": "업종",
                 "Close": "현재가",
                 "ChagesRatio": "등락률(%)",
                 "Marcap": "시가총액(억원)",
@@ -250,8 +292,8 @@ with tab_stocks:
         st.write(f"{len(display_df)}개 종목")
         st.dataframe(display_df, width="stretch", hide_index=True)
 
-        if st.button("새로고침", key="stocks_refresh"):
-            st.session_state["full_listing"] = None
+        if st.button("새로고침", key=f"stocks_refresh_{REGION}"):
+            st.session_state[listing_key] = None
             st.rerun()
 
 # ---------------------------------------------------------------- 차트
@@ -259,7 +301,7 @@ with tab_chart:
     st.subheader("종목 차트 (이동평균 + 보조지표)")
     col1, col2 = st.columns(2)
     with col1:
-        chart_ticker = st.text_input("종목코드 (예: 005930)", value="005930", key="chart_ticker")
+        chart_ticker = st.text_input(MI["code_hint"], value=MI["sample_code"], key=f"chart_ticker_{REGION}")
         chart_timeframe_label = st.radio("봉 종류", ["일봉", "주봉", "월봉"], horizontal=True, key="chart_timeframe")
         chart_mas = st.multiselect(
             "이동평균 (봉 개수)", [5, 10, 20, 60, 120, 240], default=DEFAULT_MAS, key="chart_mas"
@@ -321,7 +363,7 @@ with tab_backtest:
     st.subheader("단일 종목 백테스트")
     col1, col2 = st.columns(2)
     with col1:
-        ticker = st.text_input("종목코드 (예: 005930)", value="005930", key="bt_ticker")
+        ticker = st.text_input(MI["code_hint"], value=MI["sample_code"], key=f"bt_ticker_{REGION}")
         strategy = st.selectbox("전략", STRATEGY_NAMES, key="bt_strategy")
     with col2:
         start = st.date_input("시작일", value=datetime(2020, 1, 1), key="bt_start")
@@ -354,7 +396,7 @@ with tab_backtest:
             tp_trades = [t for t in result.trades if t.action == "TP"]
             st.write(f"익절로 미리 청산된 거래: {len(tp_trades)}건 (전체 {result.num_trades}건 중)")
 
-        st.pyplot(equity_curve_figure(result.equity_curve, f"{ticker} 자산 곡선 ({strategy})"))
+        st.pyplot(equity_curve_figure(result.equity_curve, f"{ticker} 자산 곡선 ({strategy})", currency=CURRENCY))
 
         with st.expander("매매 기록 보기"):
             st.dataframe(
@@ -375,27 +417,31 @@ with tab_compare:
         "선별기간에서 1등이던 전략이 검증기간에서도 상위권인지 봅니다. "
         "순위가 크게 떨어지면 '그 전략이 좋아서가 아니라 그 시기에 운이 좋았을 뿐'일 수 있어요."
     )
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         cmp_start = st.date_input("전체 시작일", value=datetime(2020, 1, 1), key="cmp_start")
     with col2:
         cmp_split = st.date_input("선별/검증 구분일", value=datetime(2024, 1, 1), key="cmp_split")
     with col3:
+        cmp_markets = st.multiselect("시장", SUB_MARKETS, default=DEFAULT_SUB, key=f"cmp_markets_{REGION}")
+    with col4:
         cmp_limit = st.number_input("시장별 상위 몇 개", min_value=10, max_value=300, value=100, step=10, key="cmp_limit")
 
     render_date_quick_buttons("cmp_start", "cmp_split")
+    render_universe_note(cmp_markets, cmp_limit)
 
     if st.button("비교 실행 (몇 분 걸릴 수 있음)", key="cmp_run"):
         cmp_end = datetime.today().strftime("%Y-%m-%d")
         with st.spinner("비교 중..."):
             records = compare_strategies(
-                ["KOSPI", "KOSDAQ"],
+                cmp_markets,
                 STRATEGY_NAMES,
                 cmp_start.strftime("%Y-%m-%d"),
                 cmp_split.strftime("%Y-%m-%d"),
                 cmp_end,
                 limit=cmp_limit,
                 show_progress=False,
+                region=REGION,
             )
         if records.empty:
             st.write("비교할 데이터가 없습니다.")
@@ -427,20 +473,23 @@ with tab_scan:
     st.subheader("오늘 매수 신호 스캔")
     col1, col2, col3 = st.columns(3)
     with col1:
-        markets = st.multiselect("시장", ["KOSPI", "KOSDAQ"], default=["KOSPI"], key="scan_markets")
+        markets = st.multiselect("시장", SUB_MARKETS, default=DEFAULT_SUB, key=f"scan_markets_{REGION}")
     with col2:
         scan_strategy = st.selectbox("전략", STRATEGY_NAMES, key="scan_strategy")
     with col3:
         scan_limit = st.number_input("시장별 상위 몇 개", min_value=10, max_value=500, value=100, step=10, key="scan_limit")
 
     render_strategy_info(scan_strategy)
+    render_universe_note(markets, scan_limit)
 
     if st.button("스캔 실행", key="scan_run"):
         if not markets:
             st.warning("시장을 하나 이상 선택하세요.")
         else:
             with st.spinner("스캔 중..."):
-                results = scan_stocks(markets, [scan_strategy], limit=scan_limit, show_progress=False)
+                results = scan_stocks(
+                    markets, [scan_strategy], limit=scan_limit, show_progress=False, region=REGION
+                )
             rows = [{"종목": f"{r['name']}({r['code']})", "신호": r["signals"][scan_strategy]} for r in results]
             df = pd.DataFrame(rows)
             buy_df = df[df["신호"] == "BUY"]
@@ -452,27 +501,36 @@ with tab_scan:
 
 # ---------------------------------------------------------------- 전체 스캔
 with tab_full:
-    st.subheader("전체 스캔 (9개 전략 x 코스피+코스닥)")
+    st.subheader(f"전체 스캔 (9개 전략 x {REGION} 시장)")
     st.caption("9개 전략을 모두 돌려서, 오늘 매수 신호가 뜬 종목을 찾습니다.")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
-        full_limit = st.number_input("시장별 상위 몇 개", min_value=10, max_value=300, value=100, step=10, key="full_limit")
+        full_markets = st.multiselect("시장", SUB_MARKETS, default=DEFAULT_SUB, key=f"full_markets_{REGION}")
     with col2:
+        full_limit = st.number_input("시장별 상위 몇 개", min_value=10, max_value=300, value=100, step=10, key="full_limit")
+    with col3:
         full_min_match = st.slider("최소 몇 개 전략이 일치해야 볼지", 1, len(STRATEGY_NAMES), 2, key="full_min_match")
 
-    if st.button("전체 스캔 실행 (몇 분 걸릴 수 있음)", key="full_run"):
-        with st.spinner("스캔 중..."):
-            results = scan_stocks(["KOSPI", "KOSDAQ"], STRATEGY_NAMES, limit=full_limit, show_progress=False)
-        matches = []
-        for r in results:
-            buys = [s for s, sig in r["signals"].items() if sig == "BUY"]
-            if buys:
-                matches.append({"code": r["code"], "name": r["name"], "buys": buys})
-        matches.sort(key=lambda m: len(m["buys"]), reverse=True)
-        st.session_state["full_scan_matches"] = matches
+    render_universe_note(full_markets, full_limit)
 
-    matches = st.session_state.get("full_scan_matches")
+    if st.button("전체 스캔 실행 (몇 분 걸릴 수 있음)", key="full_run"):
+        if not full_markets:
+            st.warning("시장을 하나 이상 선택하세요.")
+        else:
+            with st.spinner("스캔 중..."):
+                results = scan_stocks(
+                    full_markets, STRATEGY_NAMES, limit=full_limit, show_progress=False, region=REGION
+                )
+            matches = []
+            for r in results:
+                buys = [s for s, sig in r["signals"].items() if sig == "BUY"]
+                if buys:
+                    matches.append({"code": r["code"], "name": r["name"], "buys": buys})
+            matches.sort(key=lambda m: len(m["buys"]), reverse=True)
+            st.session_state[f"full_scan_matches_{REGION}"] = matches
+
+    matches = st.session_state.get(f"full_scan_matches_{REGION}")
     if matches is not None:
         filtered = [m for m in matches if len(m["buys"]) >= full_min_match]
         st.write(f"**{full_min_match}개 이상 일치: {len(filtered)}개 종목** (전체 매칭 {len(matches)}개)")
@@ -496,7 +554,7 @@ with tab_full:
                 pick = st.selectbox(
                     "종목 선택",
                     [f"{m['name']}({m['code']})" for m in filtered],
-                    key="full_chart_select",
+                    key=f"full_chart_select_{REGION}",
                 )
             with c2:
                 full_tf_label = st.radio("봉 종류", ["일봉", "주봉", "월봉"], horizontal=True, key="full_timeframe")
@@ -537,10 +595,12 @@ with tab_validate:
         "'여러 전략이 동시에 사라고 하면 더 좋다'가 사실인지 과거 데이터로 확인합니다. "
         "**비교 기준선(아무 날에나 샀을 때)도 같이 계산**해서, 그냥 시장이 좋아서 나온 착시인지 구분합니다."
     )
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         val_years = st.slider("최근 몇 년", 1, 6, 3, key="val_years")
     with col2:
+        val_markets = st.multiselect("시장", SUB_MARKETS, default=DEFAULT_SUB, key=f"val_markets_{REGION}")
+    with col3:
         val_limit = st.number_input("시장별 상위 몇 개", min_value=10, max_value=300, value=100, step=10, key="val_limit")
 
     if st.button("검증 실행 (몇 분 걸릴 수 있음)", key="val_run"):
@@ -548,19 +608,21 @@ with tab_validate:
         val_start = val_end - timedelta(days=int(val_years * 365))
         with st.spinner("검증 중... (신호 사례 + 비교 기준선 둘 다 계산합니다)"):
             events = collect_agreement_events(
-                ["KOSPI", "KOSDAQ"],
+                val_markets,
                 STRATEGY_NAMES,
                 val_start.strftime("%Y-%m-%d"),
                 val_end.strftime("%Y-%m-%d"),
                 limit=val_limit,
                 show_progress=False,
+                region=REGION,
             )
             baseline = compute_baseline(
-                ["KOSPI", "KOSDAQ"],
+                val_markets,
                 val_start.strftime("%Y-%m-%d"),
                 val_end.strftime("%Y-%m-%d"),
                 limit=val_limit,
                 show_progress=False,
+                region=REGION,
             )
 
         if events.empty:
@@ -583,7 +645,7 @@ with tab_optimize:
     st.subheader("파라미터 최적화 (종목 하나 x 전략 하나)")
     col1, col2 = st.columns(2)
     with col1:
-        opt_ticker = st.text_input("종목코드 (예: 005930)", value="005930", key="opt_ticker")
+        opt_ticker = st.text_input(MI["code_hint"], value=MI["sample_code"], key=f"opt_ticker_{REGION}")
         opt_strategy = st.selectbox("전략", STRATEGY_NAMES, key="opt_strategy")
     with col2:
         opt_start = st.date_input("전체 시작일", value=datetime(2020, 1, 1), key="opt_start")
@@ -622,14 +684,21 @@ with tab_portfolio:
     col1, col2 = st.columns(2)
     with col1:
         pf_strategy = st.selectbox("전략", STRATEGY_NAMES, key="pf_strategy")
-        pf_markets = st.multiselect("시장", ["KOSPI", "KOSDAQ"], default=["KOSPI", "KOSDAQ"], key="pf_markets")
+        pf_markets = st.multiselect("시장", SUB_MARKETS, default=DEFAULT_SUB, key=f"pf_markets_{REGION}")
         pf_limit = st.number_input("시장별 상위 몇 개 중에서", min_value=10, max_value=300, value=100, step=10, key="pf_limit")
     with col2:
         pf_start = st.date_input("시작일", value=datetime(2020, 1, 1), key="pf_start")
-        pf_cash = st.number_input("초기 투자금(원)", min_value=1_000_000, value=10_000_000, step=1_000_000, key="pf_cash")
+        pf_cash = st.number_input(
+            f"초기 투자금({CURRENCY})",
+            min_value=MI["cash_step"],
+            value=MI["default_cash"],
+            step=MI["cash_step"],
+            key=f"pf_cash_{REGION}",
+        )
 
     render_strategy_info(pf_strategy)
     render_date_quick_buttons("pf_start")
+    render_universe_note(pf_markets, pf_limit)
 
     col3, col4, col5 = st.columns(3)
     with col3:
@@ -663,6 +732,7 @@ with tab_portfolio:
                     stop_loss_pct=stop_loss_pct,
                     take_profit_pct=pf_take_profit,
                     show_progress=False,
+                    region=REGION,
                 )
 
             m1, m2, m3, m4 = st.columns(4)
@@ -677,7 +747,9 @@ with tab_portfolio:
             if pf_take_profit:
                 st.write(f"익절로 청산된 거래: {len([t for t in result.trades if t.action == 'TP'])}건")
 
-            st.pyplot(equity_curve_figure(result.equity_curve, f"포트폴리오 자산 곡선 ({pf_strategy})"))
+            st.pyplot(
+                equity_curve_figure(result.equity_curve, f"포트폴리오 자산 곡선 ({pf_strategy})", currency=CURRENCY)
+            )
 
             with st.expander("매매 기록 보기"):
                 st.dataframe(
@@ -862,11 +934,15 @@ with tab_notify:
 
     st.markdown("#### 2. 매일 자동 스캔 예약")
     saved_schedule = load_schedule_config()
+    st.caption(f"현재 위에서 고른 **{REGION} 주식** 기준으로 예약됩니다. 다른 시장으로 받고 싶으면 맨 위에서 시장을 바꾸세요.")
+
+    saved_markets = saved_schedule.get("markets", DEFAULT_SUB)
+    saved_markets = [m for m in saved_markets if m in SUB_MARKETS] or DEFAULT_SUB
 
     c6, c7, c8, c9 = st.columns(4)
     with c6:
         notify_markets = st.multiselect(
-            "시장", ["KOSPI", "KOSDAQ"], default=saved_schedule.get("markets", ["KOSPI", "KOSDAQ"]), key="notify_markets"
+            "시장", SUB_MARKETS, default=saved_markets, key=f"notify_markets_{REGION}"
         )
     with c7:
         notify_limit = st.number_input(
@@ -895,11 +971,19 @@ with tab_notify:
             else:
                 try:
                     time_str = notify_time.strftime("%H:%M")
-                    register_windows_task(time_str, ",".join(notify_markets), notify_limit, notify_min_match)
-                    save_schedule_config(
-                        {"time": time_str, "markets": notify_markets, "limit": notify_limit, "min_match": notify_min_match}
+                    register_windows_task(
+                        time_str, ",".join(notify_markets), notify_limit, notify_min_match, REGION
                     )
-                    st.success(f"매일 {time_str}에 자동으로 스캔해서 텔레그램으로 보내드립니다.")
+                    save_schedule_config(
+                        {
+                            "time": time_str,
+                            "region": REGION,
+                            "markets": notify_markets,
+                            "limit": notify_limit,
+                            "min_match": notify_min_match,
+                        }
+                    )
+                    st.success(f"매일 {time_str}에 {REGION} 주식을 자동 스캔해서 텔레그램으로 보내드립니다.")
                 except Exception as e:
                     st.error(f"예약 등록 실패: {e}")
     with c11:

@@ -6,6 +6,7 @@
 
 import pandas as pd
 
+from src import markets as market_api
 from src.data.kr_data import fetch_universe_data
 from src.screening import get_multi_market_universe
 from src.strategies import STRATEGIES
@@ -14,18 +15,19 @@ DEFAULT_FORWARD_DAYS = (5, 10, 20)
 
 
 def collect_agreement_events(
-    markets: list,
+    sub_markets: list,
     strategy_names: list,
     start: str,
     end: str,
     forward_days=DEFAULT_FORWARD_DAYS,
     limit: int = 100,
     show_progress: bool = True,
+    region: str = None,
 ) -> pd.DataFrame:
     """과거 전체 기간에서 '그날 막 매수 신호가 뜬' 날들을 모두 찾아서,
     그날 몇 개 전략이 동시에 일치했는지와 이후 N일 수익률을 계산한다.
     """
-    universe = get_multi_market_universe(markets, limit)
+    universe = get_multi_market_universe(sub_markets, limit, region or market_api.KR)
     data_by_code = fetch_universe_data(universe, start, end, show_progress=show_progress)
     records = []
 
@@ -66,18 +68,19 @@ def collect_agreement_events(
 
 
 def compute_baseline(
-    markets: list,
+    sub_markets: list,
     start: str,
     end: str,
     forward_days=DEFAULT_FORWARD_DAYS,
     limit: int = 100,
     show_progress: bool = True,
+    region: str = None,
 ) -> dict:
     """비교 기준선: 신호와 상관없이 '아무 날에나' 샀을 때의 평균수익률/승률.
 
     이게 없으면 '승률 52%'가 좋아 보이지만, 사실 아무 날에나 사도 52%였을 수 있다.
     """
-    universe = get_multi_market_universe(markets, limit)
+    universe = get_multi_market_universe(sub_markets, limit, region or market_api.KR)
     data_by_code = fetch_universe_data(universe, start, end, show_progress=show_progress)
 
     rows = []

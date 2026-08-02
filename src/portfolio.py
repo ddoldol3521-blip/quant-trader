@@ -1,5 +1,6 @@
 """시장+전략 지정 시 데이터 fetch부터 포트폴리오 백테스트까지 한번에 처리하는 래퍼."""
 
+from src import markets as market_api
 from src.backtest.portfolio import run_portfolio_backtest
 from src.data.kr_data import fetch_universe_data
 from src.screening import get_multi_market_universe
@@ -7,7 +8,7 @@ from src.strategies import STRATEGIES
 
 
 def run_universe_portfolio_backtest(
-    markets: list,
+    sub_markets: list,
     strategy_name: str,
     start: str,
     end: str,
@@ -18,12 +19,13 @@ def run_universe_portfolio_backtest(
     stop_loss_pct: float = None,
     take_profit_pct: float = None,
     show_progress: bool = True,
+    region: str = None,
 ):
     """여러 종목 유니버스에 대해 전략 하나로 포트폴리오 백테스트를 돌린다.
 
     반환: (PortfolioResult, {종목코드: 종목명})
     """
-    universe = get_multi_market_universe(markets, limit)
+    universe = get_multi_market_universe(sub_markets, limit, region or market_api.KR)
     data_by_code = fetch_universe_data(universe, start, end, show_progress=show_progress)
 
     module = STRATEGIES[strategy_name]

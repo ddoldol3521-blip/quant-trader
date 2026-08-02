@@ -5,6 +5,7 @@
 
 import pandas as pd
 
+from src import markets as market_api
 from src.backtest.engine import run_backtest
 from src.data.kr_data import fetch_universe_data
 from src.screening import get_multi_market_universe
@@ -12,7 +13,7 @@ from src.strategies import STRATEGIES
 
 
 def compare_strategies(
-    markets: list,
+    sub_markets: list,
     strategy_names: list,
     full_start: str,
     split_date: str,
@@ -20,13 +21,15 @@ def compare_strategies(
     limit: int = 100,
     initial_cash: float = 10_000_000,
     show_progress: bool = True,
+    region: str = None,
 ) -> pd.DataFrame:
     """여러 전략 x 여러 종목을 백테스트해서, split_date 기준으로 선별기간/검증기간 성과를 각각 계산한다.
 
     종목당 시세 데이터는 전체 기간을 한 번만 받아오고, split_date로 나눠서 각 구간을 독립적으로
     백테스트한다 (지표 계산은 전체 기간으로 하되, 자금 시뮬레이션은 구간별로 새로 시작).
     """
-    universe = get_multi_market_universe(markets, limit)
+    region = region or market_api.KR
+    universe = get_multi_market_universe(sub_markets, limit, region)
     data_by_code = fetch_universe_data(universe, full_start, full_end, show_progress=show_progress)
     records = []
 
