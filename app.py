@@ -12,7 +12,13 @@ from src import markets as market_api
 from src.backtest.engine import run_backtest
 from src.charts import equity_curve_figure
 from src.data.kr_data import get_kr_ohlcv, resample_ohlcv
-from src.interactive_chart import AVAILABLE_OSCILLATORS, build_price_chart, strategy_chart_config
+from src.cot_data import COT_MARKETS, get_cot_history, summarize_latest
+from src.interactive_chart import (
+    AVAILABLE_OSCILLATORS,
+    build_cot_chart,
+    build_price_chart,
+    strategy_chart_config,
+)
 from src.market_dashboard import get_dashboard, get_put_call_ratio
 from src.optimization import optimize_strategy
 from src.portfolio import run_universe_portfolio_backtest
@@ -859,6 +865,71 @@ with tab_market:
             "**⚠️ 중요한 한계**: 이 값은 **오늘 현재 값만 볼 수 있고 과거 데이터를 구할 수 없어서 백테스트가 불가능합니다.** "
             "즉 '이 값이 얼마일 때 사면 좋았다'를 저희가 검증할 방법이 없어요. 그래서 순수 참고용입니다."
         )
+
+    st.divider()
+    st.markdown("### 기관·투기세력 선물 포지션 (미국 COT)")
+    st.caption(
+        "미국 정부(CFTC)가 매주 공개하는 공식 자료입니다. "
+        "'큰손들이 지금 상승 쪽에 걸었나, 하락 쪽에 걸었나'를 볼 수 있어요."
+    )
+
+    with st.expander("📖 이게 뭔지 쉽게 보기"):
+        st.markdown(
+            "선물시장에서 **누가 얼마나 사고 팔았는지**를 투자자 종류별로 집계한 자료예요.\n\n"
+            "- **투기세력**: 헤지펀드·자산운용사처럼 **방향에 베팅해서 돈 벌려는 쪽**. 흔히 '스마트머니'라 부릅니다.\n"
+            "- **헤저**: 실제 사업이나 자산이 있어서 **위험을 줄이려는 쪽**(기업 등). 방향 베팅이 목적이 아니에요.\n\n"
+            "**순포지션 = 롱(매수) - 숏(매도)**\n"
+            "- **플러스(빨강)** = 상승 쪽에 더 걸어놓음\n"
+            "- **마이너스(파랑)** = 하락 쪽에 더 걸어놓음\n\n"
+            "**⚠️ 두 가지 주의**\n"
+            "1. **실시간이 아닙니다.** 매주 화요일 기준으로 집계해서 금요일에 발표해요 — 항상 3일 지난 자료입니다.\n"
+            "2. **'큰손이 샀으니 따라 사자'가 아닙니다.** 오히려 한쪽으로 극단적으로 쏠렸을 때가 "
+            "반대로 꺾이는 신호였던 경우도 많아서, 역발상 지표로 보는 사람도 많아요. "
+            "정답이 있는 지표가 아니니 '지금 분위기' 정도로만 참고하세요.\n\n"
+            "**한국은 왜 없나요?** 한국거래소(KRX)가 기관·외국인 데이터를 무료로 안 줍니다 "
+            "(로그인 계정을 요구해요). 그래서 미국 시장만 제공합니다."
+        )
+
+    cot_col1, cot_col2 = st.columns([1, 2])
+    with cot_col1:
+        cot_market = st.selectbox("시장", list(COT_MARKETS.keys()), key="cot_market")
+    with cot_col2:
+        cot_weeks = st.slider("몇 주치 볼지", 26, 260, 104, step=26, key="cot_weeks")
+
+    if st.button("포지션 불러오기", key="cot_load"):
+        with st.spinner("CFTC 데이터 받는 중..."):
+            try:
+                st.session_state["cot_df"] = get_cot_history(cot_market, weeks=cot_weeks)
+                st.session_state["cot_label"] = cot_market
+            except Exception as e:
+                st.error(f"조회 실패: {e}")
+                st.session_state["cot_df"] = None
+
+    cot_df = st.session_state.get("cot_df")
+    if cot_df is not None and not cot_df.empty:
+        s = summarize_latest(cot_df)
+        label = st.session_state.get("cot_label", cot_market)
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("투기세력 순포지션", f"{s['투기_순포지션']:+,}", f"{s['전주대비']:+,}")
+        k2.metric("롱 비중", f"{s['롱비중(%)']}%")
+        k3.metric("2년내 위치", f"{s['2년내_백분위']:.0f}%")
+        k4.metric("기준일", s["기준일"])
+
+        st.info(f"**방향**: {s['방향']}  \n**쏠림 정도**: {s['쏠림']}")
+        st.caption(
+            "'2년내 위치'는 최근 2년 중 지금이 몇 % 지점인지예요. "
+            "90% 이상이면 2년래 가장 롱에 쏠린 상태, 10% 이하면 가장 숏에 쏠린 상태입니다."
+        )
+
+        st.plotly_chart(
+            build_cot_chart(cot_df, title=f"{label} — 투기세력 포지션 추이"),
+            width="stretch",
+            config=CHART_CONFIG,
+        )
+
+        with st.expander("원본 데이터 보기"):
+            st.dataframe(cot_df.sort_values("날짜", ascending=False), width="stretch", hide_index=True)
 
     st.divider()
     st.markdown("### 미국 개별 종목 옵션 조회")

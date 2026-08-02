@@ -18,6 +18,48 @@ MA_COLORS = {
 }
 
 
+def build_cot_chart(df: pd.DataFrame, title: str = ""):
+    """COT 포지션 추이 차트. 위: 투기세력 순포지션(막대), 아래: 롱/숏 원본."""
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        row_heights=[0.55, 0.45],
+        subplot_titles=("투기세력 순포지션 (롱 - 숏)", "롱 / 숏 원본 수치"),
+    )
+
+    colors = ["#e74c3c" if v >= 0 else "#3498db" for v in df["투기_순"]]
+    fig.add_trace(
+        go.Bar(x=df["날짜"], y=df["투기_순"], name="투기 순포지션", marker_color=colors),
+        row=1,
+        col=1,
+    )
+    fig.add_hline(y=0, line=dict(color="#95a5a6", width=1), row=1, col=1)
+
+    fig.add_trace(
+        go.Scatter(x=df["날짜"], y=df["투기_롱"], name="투기 롱", line=dict(color="#e74c3c", width=1.5)),
+        row=2,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(x=df["날짜"], y=df["투기_숏"], name="투기 숏", line=dict(color="#3498db", width=1.5)),
+        row=2,
+        col=1,
+    )
+
+    fig.update_yaxes(title_text="계약 수", row=1, col=1)
+    fig.update_yaxes(title_text="계약 수", row=2, col=1)
+    fig.update_layout(
+        title=title,
+        height=560,
+        margin=dict(l=40, r=20, t=60 if title else 40, b=20),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+    )
+    return fig
+
+
 def strategy_chart_config(strategy_names: list) -> dict:
     """일치한 전략들에 맞춰 어떤 보조지표를 보여줄지 자동 결정한다.
 
