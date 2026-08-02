@@ -48,10 +48,63 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 설정은 브라우저 세션마다 따로 들고 있는다. 웹에 배포하면 여러 사람이 동시에
-# 쓰게 되는데, 전역 변수나 파일 하나로 관리하면 서로의 설정을 덮어쓴다.
+# 설정을 주소(URL)에 담는다.
+#
+# 여러 사람이 같은 앱을 쓸 때 파일 하나에 저장하면 서로의 설정을 덮어쓴다.
+# 주소에 담아두면 각자 자기 주소를 갖게 되고, 즐겨찾기 해두면 다음에 열 때도
+# 그대로 뜬다. 계정도 로그인도 필요 없다.
+_URL_KEYS = {
+    "t": ("ticker", str),
+    "s": ("initial_cash", float),
+    "n": ("daily_buy_pct", None),   # 분할수로 넣고 비율로 바꾼다
+    "d": ("start_date", str),
+    "r": ("target_return", None),   # %로 넣고 소수로 바꾼다
+    "p": ("stop_days", int),
+    "f": ("fee_rate", None),        # %로 넣고 소수로 바꾼다
+    "ri": ("reinvest", None),       # 1 / 0
+    "m": ("sell_day_buy_mode", str),
+}
+
+
+def cfg_from_url(base: dict) -> dict:
+    """주소에 붙은 설정을 읽어 기본 설정 위에 덮어쓴다. 이상한 값은 무시한다."""
+    cfg = dict(base)
+    qp = st.query_params
+    for key, (name, caster) in _URL_KEYS.items():
+        if key not in qp:
+            continue
+        raw = qp[key]
+        try:
+            if key == "n":
+                cfg["daily_buy_pct"] = 1 / int(raw)
+            elif key in ("r", "f"):
+                cfg[name] = float(raw) / 100
+            elif key == "ri":
+                cfg[name] = raw not in ("0", "false", "False")
+            else:
+                cfg[name] = caster(raw)
+        except (ValueError, TypeError, ZeroDivisionError):
+            continue  # 주소를 손으로 고치다 깨진 경우 — 기본값을 쓴다
+    return cfg
+
+
+def cfg_to_url(cfg: dict) -> None:
+    """현재 설정을 주소에 반영한다. 이 주소를 즐겨찾기하면 설정이 유지된다."""
+    st.query_params.from_dict({
+        "t": cfg["ticker"],
+        "s": f"{cfg['initial_cash']:.0f}",
+        "n": f"{round(1 / cfg['daily_buy_pct'])}",
+        "d": cfg["start_date"],
+        "r": f"{cfg['target_return'] * 100:g}",
+        "p": f"{int(cfg['stop_days'])}",
+        "f": f"{cfg['fee_rate'] * 100:g}",
+        "ri": "1" if cfg["reinvest"] else "0",
+        "m": cfg["sell_day_buy_mode"],
+    })
+
+
 if "cfg" not in st.session_state:
-    st.session_state.cfg = load_config()
+    st.session_state.cfg = cfg_from_url(load_config())
 cfg = st.session_state.cfg
 
 
@@ -78,7 +131,8 @@ st.markdown("# 🔁 종사종팔 V5")
 if is_shared_server():
     st.caption(
         "SOXL 분할매매 계산기입니다. **투자 자문이 아니고 수익을 보장하지 않습니다.** "
-        "설정은 이 브라우저 탭에서만 유지되고 서버에 저장되지 않습니다 — 새로고침하면 기본값으로 돌아갑니다."
+        "설정은 사람마다 따로 유지됩니다 — **지금 주소를 즐겨찾기 해두면** 다음에 열 때도 "
+        "이 설정 그대로 뜹니다 (주소창을 보면 설정값이 붙어 있습니다)."
     )
 
 r1c1, r1c2, r1c3, r1c4 = st.columns([1, 1.1, 1, 1.2])
@@ -127,7 +181,8 @@ new_cfg = {
 }
 if any(cfg.get(k) != v for k, v in new_cfg.items()):
     cfg.update(new_cfg)
-    save_config(cfg)
+    save_config(cfg)   # 내 PC에서 켰을 때만 저장된다 (공용 서버에서는 무시)
+cfg_to_url(cfg)        # 주소에 설정을 실어둔다 — 즐겨찾기하면 이 설정으로 다시 열린다
 
 # ============================================================ 계산
 try:
