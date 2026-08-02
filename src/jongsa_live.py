@@ -33,6 +33,84 @@ SELL_DAY_MODES = {
 }
 
 
+# 검증된 설정 묶음. CAGR/MDD 수치는 2010-04~2024-12 SOXL 백테스트 결과로,
+# 원본 스프레드시트와 0.1%p 이내로 일치함을 확인했다.
+PRESETS = {
+    "안정형 (3%)": {
+        "daily_buy_pct": 0.03,
+        "target_return": 0.0275,
+        "stop_days": 10,
+        "sell_day_buy_mode": "never",
+        "설명": "가장 안전. 낙폭이 얕은 대신 수익도 낮다.",
+        "CAGR": 8.4,
+        "MDD": -9.6,
+        "효율": 0.87,
+    },
+    "안정형+ (6.5%)": {
+        "daily_buy_pct": 0.065,
+        "target_return": 0.0275,
+        "stop_days": 10,
+        "sell_day_buy_mode": "never",
+        "설명": "표준보다 한 단계 보수적.",
+        "CAGR": 19.5,
+        "MDD": -20.3,
+        "효율": 0.96,
+    },
+    "표준 (10%) ★추천": {
+        "daily_buy_pct": 0.10,
+        "target_return": 0.0275,
+        "stop_days": 10,
+        "sell_day_buy_mode": "never",
+        "설명": "원본 기본값. 위험 대비 효율이 가장 좋은 구간이라 처음엔 여기서 시작하는 게 좋다.",
+        "CAGR": 30.5,
+        "MDD": -30.4,
+        "효율": 1.01,
+    },
+    "적극형 (11.1%)": {
+        "daily_buy_pct": 0.111,
+        "target_return": 0.0275,
+        "stop_days": 10,
+        "sell_day_buy_mode": "never",
+        "설명": "표준에 익숙해진 뒤 다음 단계. 효율 손해가 거의 없다.",
+        "CAGR": 33.5,
+        "MDD": -33.4,
+        "효율": 1.00,
+    },
+    "공격형 (12.5%)": {
+        "daily_buy_pct": 0.125,
+        "target_return": 0.0275,
+        "stop_days": 10,
+        "sell_day_buy_mode": "never",
+        "설명": "여기부터 효율이 떨어지기 시작한다. 원본 자료도 이 위로는 권하지 않는다.",
+        "CAGR": 36.5,
+        "MDD": -37.6,
+        "효율": 0.97,
+    },
+    "표준 + 손절재진입": {
+        "daily_buy_pct": 0.10,
+        "target_return": 0.027,
+        "stop_days": 10,
+        "sell_day_buy_mode": "any_loss",
+        "설명": "손절로 비워진 자리를 바로 다시 채운다. 효율은 오르지만 낙폭이 깊어지고, 매일 판단할 게 하나 늘어난다.",
+        "CAGR": 35.4,
+        "MDD": -44.0,
+        "효율": 0.80,
+    },
+}
+
+
+def apply_preset(state: dict, preset_name: str) -> dict:
+    """프리셋을 현재 설정에 적용한다 (수수료·정수주 설정은 그대로 둔다)."""
+    p = PRESETS.get(preset_name)
+    if not p:
+        return state
+    for k in ("daily_buy_pct", "target_return", "stop_days", "sell_day_buy_mode"):
+        state["config"][k] = p[k]
+    state["config"]["preset_name"] = preset_name
+    save_state(state)
+    return state
+
+
 def should_buy_on_sell_day(sold_pnls: list, mode: str) -> bool:
     """오늘 매도가 있었을 때 매수해도 되는지 판정."""
     if not sold_pnls:
