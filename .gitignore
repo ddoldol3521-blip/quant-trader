@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.png
+.env
+telegram_config.json
+notify_schedule.json
+charts/
