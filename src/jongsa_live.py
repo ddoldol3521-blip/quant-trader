@@ -1,29 +1,29 @@
-"""종사종팔 V5 실전 운용 도우미.
+"""종사종팔 V5 설정 관리.
 
-매일 '얼마 사고, 뭘 팔지'를 계산해준다. 실제 주문은 사용자가 증권사 앱에서 직접 한다.
-
-보유 내역은 로컬 JSON에 저장한다(jongsa_positions.json). 이 파일은 .gitignore에 있다.
+**매매 기록을 저장하지 않는다.** 시작일과 규칙이 정해지면 그날부터 오늘까지의
+모든 매매가 자동으로 결정되기 때문이다. 앱은 열릴 때마다 시작일부터 다시 계산한다.
+그래서 여기에 남는 건 '설정값'뿐이고, 그걸 jongsa_settings.json에 저장한다.
 """
 
 import json
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
-import pandas as pd
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-STATE_PATH = PROJECT_ROOT / "jongsa_positions.json"
+SETTINGS_PATH = PROJECT_ROOT / "jongsa_settings.json"
 
 DEFAULT_CONFIG = {
     "ticker": "SOXL",
+    "start_date": "2025-01-02",  # 이 날부터 규칙대로 했다고 가정하고 계산한다
     "target_return": 0.0275,   # 목표수익률 2.75%
-    "daily_buy_pct": 0.10,     # 하루 매수금 = 총자산의 10%
+    "daily_buy_pct": 0.10,     # 하루 매수금 = 총자산의 10% (=10분할)
     "stop_days": 10,           # 10영업일째 강제청산
-    "initial_cash": 10000.0,
+    "initial_cash": 10000.0,   # 시드
     "fee_rate": 0.0,           # 편도 수수료 (증권사마다 다름). 0이면 무시된다
     "fee_in_target": True,     # 목표가에 왕복 수수료를 얹을지 (원본 스프레드시트 방식)
     "whole_shares": True,      # 정수주만 매수 (원본 스프레드시트 방식)
     "sell_day_buy_mode": "never",  # 매도일에도 매수할지 — never / all_loss / any_loss
+    "reinvest": True,          # 번 돈까지 굴릴지(복리) / 하루 매수금을 시드 기준으로 고정할지
 }
 
 # 매도가 있는 날 매수를 허용하는 방식들. 손절로 청산된 자리는 목표 미달이니
@@ -101,49 +101,36 @@ PRESETS = {
 }
 
 
-def apply_preset(state: dict, preset_name: str) -> dict:
-    """프리셋을 현재 설정에 적용한다 (수수료·정수주 설정은 그대로 둔다)."""
+def load_config() -> dict:
+    """저장된 설정을 불러온다. 없거나 항목이 빠져 있으면 기본값으로 채운다."""
+    if not SETTINGS_PATH.exists():
+        return dict(DEFAULT_CONFIG)
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            saved = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return dict(DEFAULT_CONFIG)
+    # 예전 형식(설정이 config 키 안에 들어 있던 파일)도 읽어준다
+    if "config" in saved and isinstance(saved["config"], dict):
+        saved = saved["config"]
+    return {**DEFAULT_CONFIG, **saved}
+
+
+def save_config(cfg: dict) -> None:
+    keep = {k: cfg[k] for k in DEFAULT_CONFIG if k in cfg}
+    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(keep, f, ensure_ascii=False, indent=2)
+
+
+def apply_preset(cfg: dict, preset_name: str) -> dict:
+    """프리셋을 설정에 적용한다 (수수료·정수주 설정은 그대로 둔다)."""
     p = PRESETS.get(preset_name)
     if not p:
-        return state
+        return cfg
     for k in ("daily_buy_pct", "target_return", "stop_days", "sell_day_buy_mode"):
-        state["config"][k] = p[k]
-    state["config"]["preset_name"] = preset_name
-    save_state(state)
-    return state
-
-
-def import_from_backtest(state: dict, result, initial_cash: float, start_date: str) -> dict:
-    """과거부터 규칙대로 돌린 시뮬레이션 결과를 실제 기록으로 이어받는다.
-
-    예전부터 이 전략을 해온 사람이 매매 하나하나를 손으로 입력하지 않아도 되게 하려는 것.
-    시작일과 초기자금만 주면 그때부터 오늘까지를 자동으로 채운다.
-    """
-    state["cash"] = float(result.final_cash)
-    state["lots"] = [dict(l) for l in result.final_lots]
-
-    closed = []
-    if result.trades is not None and not result.trades.empty:
-        for _, t in result.trades.iterrows():
-            closed.append(
-                {
-                    "buy_date": pd.Timestamp(t["매수일"]).strftime("%Y-%m-%d"),
-                    "buy_price": float(t["매수가"]),
-                    "qty": float(t["수량"]),
-                    "target_price": float(t["매수가"]) * (1 + state["config"]["target_return"]),
-                    "sell_date": pd.Timestamp(t["매도일"]).strftime("%Y-%m-%d"),
-                    "sell_price": float(t["매도가"]),
-                    "pnl": float(t["손익"]),
-                    "return_pct": float(t["수익률(%)"]),
-                    "reason": str(t["청산사유"]),
-                }
-            )
-    state["closed"] = closed
-    state["config"]["initial_cash"] = float(initial_cash)
-    state["created"] = start_date
-    state["imported_from"] = {"start": start_date, "at": _today_str()}
-    save_state(state)
-    return state
+        cfg[k] = p[k]
+    save_config(cfg)
+    return cfg
 
 
 def should_buy_on_sell_day(sold_pnls: list, mode: str) -> bool:
@@ -169,49 +156,6 @@ def target_price_for(price: float, cfg: dict) -> float:
     return tgt
 
 
-def _today_str() -> str:
-    return date.today().isoformat()
-
-
-def load_state() -> dict:
-    """저장된 상태를 불러온다. 없으면 기본값."""
-    if not STATE_PATH.exists():
-        return {
-            "config": dict(DEFAULT_CONFIG),
-            "cash": DEFAULT_CONFIG["initial_cash"],
-            "lots": [],
-            "closed": [],
-            "created": _today_str(),
-        }
-    with open(STATE_PATH, encoding="utf-8") as f:
-        state = json.load(f)
-    # 예전 파일에 없는 설정 키는 기본값으로 채운다
-    cfg = {**DEFAULT_CONFIG, **state.get("config", {})}
-    state["config"] = cfg
-    state.setdefault("lots", [])
-    state.setdefault("closed", [])
-    return state
-
-
-def save_state(state: dict) -> None:
-    with open(STATE_PATH, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
-
-
-def reset_state(initial_cash: float, config: dict = None) -> dict:
-    cfg = {**DEFAULT_CONFIG, **(config or {})}
-    cfg["initial_cash"] = initial_cash
-    state = {
-        "config": cfg,
-        "cash": float(initial_cash),
-        "lots": [],
-        "closed": [],
-        "created": _today_str(),
-    }
-    save_state(state)
-    return state
-
-
 def business_days_between(start: str, end: str) -> int:
     """두 날짜 사이 영업일 수 (주말만 제외, 공휴일은 미반영).
 
@@ -221,132 +165,3 @@ def business_days_between(start: str, end: str) -> int:
     import numpy as np
 
     return int(np.busday_count(np.datetime64(start), np.datetime64(end)))
-
-
-def total_assets(state: dict, current_price: float) -> float:
-    shares = sum(lot["qty"] for lot in state["lots"])
-    return state["cash"] + shares * current_price
-
-
-def daily_plan(state: dict, current_price: float, prev_total: float = None) -> dict:
-    """오늘 할 일을 계산한다.
-
-    prev_total: 어제 마감 기준 총자산. 안 주면 현재가로 계산한 총자산을 쓴다
-                (장중에 미리 볼 때는 근사치가 된다).
-    """
-    cfg = state["config"]
-    today = _today_str()
-
-    sells = []
-    for lot in state["lots"]:
-        held = business_days_between(lot["buy_date"], today)
-        target = lot["target_price"]
-        if held >= cfg["stop_days"]:
-            sells.append({**lot, "보유영업일": held, "사유": "강제청산(10일 경과)", "목표가": target})
-        elif held >= 1 and current_price >= target:
-            sells.append({**lot, "보유영업일": held, "사유": "목표 도달", "목표가": target})
-
-    # 각 매도 건의 예상 손익 (매도일 매수 허용 판정에 쓴다)
-    fee_now = cfg.get("fee_rate", 0.0)
-    sold_pnls = [
-        s["qty"] * current_price * (1 - fee_now) - s["qty"] * s["buy_price"] * (1 + fee_now)
-        for s in sells
-    ]
-    for s, p in zip(sells, sold_pnls):
-        s["예상손익"] = p
-
-    mode = cfg.get("sell_day_buy_mode", "never")
-    will_buy = should_buy_on_sell_day(sold_pnls, mode)
-
-    base = prev_total if prev_total is not None else total_assets(state, current_price)
-    desired = base * cfg["daily_buy_pct"]
-    budget = min(desired, state["cash"]) if will_buy else 0.0
-
-    fee = cfg.get("fee_rate", 0.0)
-    buy_qty = 0.0
-    actual_cost = 0.0
-    if will_buy and current_price > 0 and budget > 0:
-        # 스프레드시트 방식: 수량 = 예산*(1-수수료)/종가, 실제비용 = 종가*수량*(1+수수료)
-        buy_qty = budget * (1 - fee) / current_price
-        if cfg.get("whole_shares", True):
-            buy_qty = float(int(buy_qty))
-        actual_cost = buy_qty * current_price * (1 + fee)
-
-    return {
-        "날짜": today,
-        "현재가": current_price,
-        "총자산": total_assets(state, current_price),
-        "예수금": state["cash"],
-        "보유수량": sum(lot["qty"] for lot in state["lots"]),
-        "보유건수": len(state["lots"]),
-        "매도대상": sells,
-        "매수여부": will_buy,
-        "매수예산": budget,
-        "매수금액": actual_cost,
-        "매수수량": buy_qty,
-        "매수후_목표가": target_price_for(current_price, cfg) if will_buy else None,
-        "예수금부족": will_buy and desired > state["cash"] + 1e-9,
-    }
-
-
-def record_buy(state: dict, buy_date: str, price: float, qty: float) -> dict:
-    """실제로 매수한 내역을 기록한다."""
-    cfg = state["config"]
-    fee = cfg.get("fee_rate", 0.0)
-    cost = price * qty * (1 + fee)
-    state["cash"] -= cost
-    state["lots"].append(
-        {
-            "buy_date": buy_date,
-            "buy_price": float(price),
-            "qty": float(qty),
-            "target_price": target_price_for(float(price), cfg),
-        }
-    )
-    save_state(state)
-    return state
-
-
-def record_sell(state: dict, lot_index: int, sell_date: str, price: float, reason: str = "") -> dict:
-    """실제로 매도한 내역을 기록한다."""
-    cfg = state["config"]
-    fee = cfg.get("fee_rate", 0.0)
-    lot = state["lots"].pop(lot_index)
-    proceeds = price * lot["qty"] * (1 - fee)
-    state["cash"] += proceeds
-    pnl = proceeds - lot["buy_price"] * lot["qty"]
-    state["closed"].append(
-        {
-            **lot,
-            "sell_date": sell_date,
-            "sell_price": float(price),
-            "pnl": float(pnl),
-            "return_pct": (price / lot["buy_price"] - 1) * 100,
-            "reason": reason,
-        }
-    )
-    save_state(state)
-    return state
-
-
-def performance(state: dict, current_price: float) -> dict:
-    """지금까지 성적."""
-    closed = state["closed"]
-    cfg = state["config"]
-    realized = sum(c["pnl"] for c in closed)
-    unrealized = sum((current_price - lot["buy_price"]) * lot["qty"] for lot in state["lots"])
-    total = total_assets(state, current_price)
-    initial = cfg["initial_cash"]
-    wins = sum(1 for c in closed if c["pnl"] > 0)
-
-    return {
-        "총자산": total,
-        "초기자금": initial,
-        "총수익": total - initial,
-        "총수익률(%)": (total / initial - 1) * 100 if initial else 0.0,
-        "실현손익": realized,
-        "평가손익": unrealized,
-        "매매횟수": len(closed),
-        "승률(%)": (wins / len(closed) * 100) if closed else 0.0,
-        "보유비중(%)": (sum(l["qty"] for l in state["lots"]) * current_price / total * 100) if total else 0.0,
-    }

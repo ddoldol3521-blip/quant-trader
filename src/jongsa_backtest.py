@@ -78,6 +78,7 @@ def run_jongsa(
     season_reseed: bool = False,
     fee_in_target: bool = False,
     sell_day_buy_mode: str = "never",
+    reinvest: bool = True,
     dd_thresholds=(-0.20, -0.25, -0.30),
 ) -> JongsaResult:
     """종사종팔 백테스트.
@@ -192,7 +193,14 @@ def run_jongsa(
 
         if buy_today:
             if version.upper() == "V5":
-                desired = season_seed if season_reseed else prev_total_assets * daily_buy_pct
+                if season_reseed:
+                    desired = season_seed
+                elif reinvest:
+                    # 번 돈까지 굴린다 — 자산이 늘면 하루 매수금도 같이 늘어난다
+                    desired = prev_total_assets * daily_buy_pct
+                else:
+                    # 재투자 안 함 — 하루 매수금을 처음 시드 기준으로 고정
+                    desired = initial_cash * daily_buy_pct
             else:  # V4
                 if t > 0:
                     should_update = True
