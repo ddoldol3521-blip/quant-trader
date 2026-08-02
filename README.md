@@ -37,6 +37,12 @@
 
 설정값은 `jongsa_settings.json`에 저장되며, 보유 내역이나 매매 기록은 저장하지 않습니다. 규칙을 어긴 매매를 하셨다면 화면 숫자와 실제 잔고가 달라집니다.
 
+## 웹에 올리기
+
+**[DEPLOY.md](DEPLOY.md)** 에 단계별 안내가 있습니다 (Streamlit Community Cloud, 무료, 20~30분).
+
+여러 사람이 접속하는 서버에서는 설정을 파일에 저장하지 않습니다 — 접속자끼리 서로의 설정을 덮어쓰기 때문입니다. 그런 환경에서는 설정이 브라우저 세션 안에서만 유지됩니다. 판별은 `src/jongsa_live.py`의 `is_shared_server()`가 하며, Streamlit Cloud(`/mount/src` 존재) 또는 환경변수 `QUANT_SHARED_SERVER=1`로 켜집니다.
+
 직접 실행하려면:
 
 ```powershell

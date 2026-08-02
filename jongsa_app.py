@@ -18,7 +18,8 @@ from src.data.kr_data import get_kr_ohlcv
 from src.jongsa_backtest import run_jongsa
 from src.jongsa_live import PRESETS, SELL_DAY_MODES
 from src.jongsa_live import business_days_between as bdays
-from src.jongsa_live import apply_preset, load_config, save_config, target_price_for
+from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
+from src.jongsa_live import target_price_for
 
 st.set_page_config(page_title="종사종팔 V5", page_icon="🔁", layout="wide")
 
@@ -47,7 +48,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-cfg = load_config()
+# 설정은 브라우저 세션마다 따로 들고 있는다. 웹에 배포하면 여러 사람이 동시에
+# 쓰게 되는데, 전역 변수나 파일 하나로 관리하면 서로의 설정을 덮어쓴다.
+if "cfg" not in st.session_state:
+    st.session_state.cfg = load_config()
+cfg = st.session_state.cfg
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -70,6 +75,11 @@ def simulate(ticker, start, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode, 
 
 # ============================================================ 설정 (맨 위)
 st.markdown("# 🔁 종사종팔 V5")
+if is_shared_server():
+    st.caption(
+        "SOXL 분할매매 계산기입니다. **투자 자문이 아니고 수익을 보장하지 않습니다.** "
+        "설정은 이 브라우저 탭에서만 유지되고 서버에 저장되지 않습니다 — 새로고침하면 기본값으로 돌아갑니다."
+    )
 
 r1c1, r1c2, r1c3, r1c4 = st.columns([1, 1.1, 1, 1.2])
 with r1c1:

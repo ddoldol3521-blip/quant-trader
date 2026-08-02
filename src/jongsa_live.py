@@ -3,14 +3,30 @@
 **매매 기록을 저장하지 않는다.** 시작일과 규칙이 정해지면 그날부터 오늘까지의
 모든 매매가 자동으로 결정되기 때문이다. 앱은 열릴 때마다 시작일부터 다시 계산한다.
 그래서 여기에 남는 건 '설정값'뿐이고, 그걸 jongsa_settings.json에 저장한다.
+
+단, 웹에 배포된 상태에서는 **저장하지 않는다**. 서버 파일 하나를 모든 접속자가
+공유하게 되어 서로의 설정을 덮어쓰기 때문이다. 그 경우 설정은 브라우저 세션
+안에서만 유지된다 (앱 쪽에서 st.session_state로 들고 있는다).
 """
 
 import json
+import os
 from datetime import date
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SETTINGS_PATH = PROJECT_ROOT / "jongsa_settings.json"
+
+
+def is_shared_server() -> bool:
+    """여러 사람이 함께 쓰는 서버에서 돌고 있는지.
+
+    Streamlit Community Cloud는 저장소를 /mount/src 아래에 마운트한다.
+    직접 서버에 올려 쓰는 경우를 위해 환경변수로도 켤 수 있게 해뒀다.
+    """
+    if os.environ.get("QUANT_SHARED_SERVER", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    return Path("/mount/src").exists()
 
 DEFAULT_CONFIG = {
     "ticker": "SOXL",
@@ -103,7 +119,7 @@ PRESETS = {
 
 def load_config() -> dict:
     """저장된 설정을 불러온다. 없거나 항목이 빠져 있으면 기본값으로 채운다."""
-    if not SETTINGS_PATH.exists():
+    if is_shared_server() or not SETTINGS_PATH.exists():
         return dict(DEFAULT_CONFIG)
     try:
         with open(SETTINGS_PATH, encoding="utf-8") as f:
@@ -116,10 +132,17 @@ def load_config() -> dict:
     return {**DEFAULT_CONFIG, **saved}
 
 
-def save_config(cfg: dict) -> None:
+def save_config(cfg: dict) -> bool:
+    """설정을 파일에 저장한다. 공용 서버에서는 저장하지 않고 False를 반환한다."""
+    if is_shared_server():
+        return False
     keep = {k: cfg[k] for k in DEFAULT_CONFIG if k in cfg}
-    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-        json.dump(keep, f, ensure_ascii=False, indent=2)
+    try:
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(keep, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError:
+        return False
 
 
 def apply_preset(cfg: dict, preset_name: str) -> dict:
