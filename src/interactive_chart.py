@@ -60,6 +60,74 @@ def build_cot_chart(df: pd.DataFrame, title: str = ""):
     return fig
 
 
+def build_cot_price_chart(df: pd.DataFrame, title: str = "", price_label: str = "선물 가격"):
+    """선물 가격과 COT 포지션을 위아래로 붙여서 같은 시간축에 그린다.
+
+    포지션 숫자만 보면 해석이 안 된다. '큰손이 롱을 늘리는 동안 가격은 어땠나'를
+    같은 화면에서 봐야 의미가 생긴다.
+    """
+    has_price = "가격" in df.columns and df["가격"].notna().any()
+    rows = 3 if has_price else 2
+
+    titles = ["선물 가격"] if has_price else []
+    titles += ["투기세력 순포지션 (롱 - 숏)", "롱 / 숏 원본 수치"]
+
+    fig = make_subplots(
+        rows=rows,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        row_heights=[0.4, 0.3, 0.3] if has_price else [0.55, 0.45],
+        subplot_titles=titles,
+    )
+
+    r = 1
+    if has_price:
+        fig.add_trace(
+            go.Scatter(
+                x=df["날짜"],
+                y=df["가격"],
+                name=price_label,
+                line=dict(color="#f1c40f", width=2),
+            ),
+            row=r,
+            col=1,
+        )
+        fig.update_yaxes(title_text="가격", row=r, col=1)
+        r += 1
+
+    colors = ["#e74c3c" if v >= 0 else "#3498db" for v in df["투기_순"]]
+    fig.add_trace(
+        go.Bar(x=df["날짜"], y=df["투기_순"], name="투기 순포지션", marker_color=colors),
+        row=r,
+        col=1,
+    )
+    fig.add_hline(y=0, line=dict(color="#95a5a6", width=1), row=r, col=1)
+    fig.update_yaxes(title_text="계약 수", row=r, col=1)
+    r += 1
+
+    fig.add_trace(
+        go.Scatter(x=df["날짜"], y=df["투기_롱"], name="투기 롱", line=dict(color="#e74c3c", width=1.5)),
+        row=r,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(x=df["날짜"], y=df["투기_숏"], name="투기 숏", line=dict(color="#3498db", width=1.5)),
+        row=r,
+        col=1,
+    )
+    fig.update_yaxes(title_text="계약 수", row=r, col=1)
+
+    fig.update_layout(
+        title=title,
+        height=760 if has_price else 560,
+        margin=dict(l=40, r=20, t=70 if title else 45, b=20),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+    )
+    return fig
+
+
 def strategy_chart_config(strategy_names: list) -> dict:
     """일치한 전략들에 맞춰 어떤 보조지표를 보여줄지 자동 결정한다.
 

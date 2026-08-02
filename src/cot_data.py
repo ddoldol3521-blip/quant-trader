@@ -26,6 +26,14 @@ COT_MARKETS = {
     "VIX 선물": "VIX FUTURES - CBOE FUTURES EXCHANGE",
 }
 
+# COT 시장 -> 그 선물의 실제 가격을 볼 수 있는 yfinance 티커
+COT_PRICE_TICKERS = {
+    "S&P500 선물": "ES=F",
+    "나스닥100 선물": "NQ=F",
+    "러셀2000 선물": "RTY=F",
+    "VIX 선물": "^VIX",
+}
+
 # 투자자 유형 설명 (쉬운 말로)
 TRADER_TYPES = {
     "투기세력": "헤지펀드·자산운용사 등. 방향에 베팅해서 돈 벌려는 쪽이라 '스마트머니'로 불리기도 한다.",
@@ -132,6 +140,49 @@ def summarize_latest(df: pd.DataFrame) -> dict:
         "헤저_순포지션": int(latest["헤저_순"]),
         "미결제약정": int(latest["미결제약정"]),
     }
+
+
+def get_price_with_cot(market_label: str, weeks: int = 104) -> pd.DataFrame:
+    """COT 포지션에 그 선물의 실제 가격을 붙여서 돌려준다.
+
+    포지션 숫자만 봐서는 해석이 안 된다. '큰손이 롱을 늘리는 동안 가격은 어땠나'를
+    같이 봐야 의미가 생긴다. COT는 주간이라 가격도 주간(금요일 종가)으로 맞춘다.
+    """
+    from src import ssl_fix
+
+    ssl_fix.apply()
+    import yfinance as yf
+
+    cot = get_cot_history(market_label, weeks)
+    if cot.empty:
+        return cot
+
+    ticker = COT_PRICE_TICKERS.get(market_label)
+    if not ticker:
+        return cot
+
+    # COT 기간을 덮을 만큼 넉넉히 받아온다
+    span_days = (datetime.now() - cot["날짜"].min().to_pydatetime()).days + 30
+    period = "10y" if span_days > 1825 else ("5y" if span_days > 730 else "2y")
+
+    try:
+        hist = yf.Ticker(ticker).history(period=period)
+    except Exception:
+        return cot
+    if hist.empty:
+        return cot
+
+    price = hist["Close"].dropna()
+    price.index = price.index.tz_localize(None)
+
+    # COT 보고일(화요일) 시점의 가장 가까운 이전 종가를 붙인다
+    merged = pd.merge_asof(
+        cot.sort_values("날짜"),
+        price.rename("가격").reset_index().rename(columns={price.index.name or "Date": "날짜"}).sort_values("날짜"),
+        on="날짜",
+        direction="backward",
+    )
+    return merged
 
 
 def get_all_markets_summary(weeks: int = 104) -> dict:

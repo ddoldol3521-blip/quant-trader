@@ -12,10 +12,10 @@ from src import markets as market_api
 from src.backtest.engine import run_backtest
 from src.charts import equity_curve_figure
 from src.data.kr_data import get_kr_ohlcv, resample_ohlcv
-from src.cot_data import COT_MARKETS, get_cot_history, summarize_latest
+from src.cot_data import COT_MARKETS, get_price_with_cot, summarize_latest
 from src.interactive_chart import (
     AVAILABLE_OSCILLATORS,
-    build_cot_chart,
+    build_cot_price_chart,
     build_price_chart,
     strategy_chart_config,
 )
@@ -896,10 +896,10 @@ with tab_market:
     with cot_col2:
         cot_weeks = st.slider("몇 주치 볼지", 26, 260, 104, step=26, key="cot_weeks")
 
-    if st.button("포지션 불러오기", key="cot_load"):
-        with st.spinner("CFTC 데이터 받는 중..."):
+    if st.button("포지션 + 가격 불러오기", key="cot_load"):
+        with st.spinner("CFTC 포지션 + 선물 가격 받는 중..."):
             try:
-                st.session_state["cot_df"] = get_cot_history(cot_market, weeks=cot_weeks)
+                st.session_state["cot_df"] = get_price_with_cot(cot_market, weeks=cot_weeks)
                 st.session_state["cot_label"] = cot_market
             except Exception as e:
                 st.error(f"조회 실패: {e}")
@@ -923,9 +923,26 @@ with tab_market:
         )
 
         st.plotly_chart(
-            build_cot_chart(cot_df, title=f"{label} — 투기세력 포지션 추이"),
+            build_cot_price_chart(cot_df, title=f"{label} — 가격 + 투기세력 포지션", price_label=label),
             width="stretch",
             config=CHART_CONFIG,
+        )
+
+        if "가격" in cot_df.columns and cot_df["가격"].notna().any():
+            corr = cot_df["투기_순"].corr(cot_df["가격"])
+            st.caption(
+                f"이 기간 **포지션과 가격의 상관계수: {corr:+.2f}** "
+                "(+1에 가까우면 같이 움직임, -1에 가까우면 반대로 움직임, 0이면 관계 없음). "
+                "상관관계가 있다고 해서 인과관계는 아닙니다 — 참고용 숫자예요."
+            )
+
+        st.info(
+            "**차트 보는 법**: 맨 위가 실제 가격, 가운데가 투기세력 순포지션입니다. "
+            "이 둘을 같이 봐야 의미가 생겨요 — 예를 들어 **가격은 오르는데 순포지션이 계속 줄고 있으면** "
+            "'큰손들이 이 상승을 안 믿고 빠져나가는 중'으로 읽는 사람들이 있습니다. "
+            "반대로 순포지션이 극단까지 한쪽으로 몰린 뒤 가격이 꺾인 사례도 많고요.\n\n"
+            "다만 **이건 정답이 있는 지표가 아닙니다.** 같은 그림을 보고도 해석이 갈려요. "
+            "'지금 큰손들 분위기가 이렇구나' 정도로만 보시고, 이것만으로 매매 결정하지 마세요."
         )
 
         with st.expander("원본 데이터 보기"):
