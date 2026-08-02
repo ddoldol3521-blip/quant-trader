@@ -72,6 +72,7 @@ def run_jongsa(
     loc_buy_limit: bool = False,
     season_reseed: bool = False,
     fee_in_target: bool = False,
+    sell_day_buy_mode: str = "never",
     dd_thresholds=(-0.20, -0.25, -0.30),
 ) -> JongsaResult:
     """종사종팔 백테스트.
@@ -112,6 +113,7 @@ def run_jongsa(
 
         # ---------- 1) 매도 판정 ----------
         did_sell = False
+        sold_pnls: list[float] = []
         remaining: list[Lot] = []
         for lot in open_lots:
             held = t - lot.buy_day_idx
@@ -142,13 +144,24 @@ def run_jongsa(
                     }
                 )
                 did_sell = True
+                sold_pnls.append(pnl)
             else:
                 remaining.append(lot)
         open_lots = remaining
 
         # ---------- 2) 매수 판정 ----------
-        # 매도가 있는 날은 매수하지 않는다 (V4부터 적용된 규칙)
-        buy_today = not did_sell
+        # 기본은 '매도가 있는 날은 매수하지 않는다'(V4부터의 규칙).
+        # 변형: 손절로 청산된 건은 목표 미달이니 재진입을 허용한다는 발상.
+        #   any_loss — 오늘 매도분 중 손실이 하나라도 있으면 매수
+        #   all_loss — 오늘 매도분이 전부 손실일 때만 매수
+        if not did_sell:
+            buy_today = True
+        elif sell_day_buy_mode == "any_loss":
+            buy_today = any(p < 0 for p in sold_pnls)
+        elif sell_day_buy_mode == "all_loss":
+            buy_today = all(p < 0 for p in sold_pnls)
+        else:
+            buy_today = False
 
         # LOC 지정가 매수: 주문가 = 전일종가 x (1+목표수익률).
         # 오늘 종가가 그보다 높으면(= 어제보다 많이 올랐으면) 체결되지 않는다.

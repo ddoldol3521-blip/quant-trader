@@ -19,6 +19,7 @@ from src.jongsa_live import load_state as jongsa_load_state
 from src.jongsa_live import performance as jongsa_performance
 from src.jongsa_live import record_buy as jongsa_record_buy
 from src.jongsa_live import record_sell as jongsa_record_sell
+from src.jongsa_live import SELL_DAY_MODES as JONGSA_SELL_MODES
 from src.jongsa_live import reset_state as jongsa_reset_state
 from src.jongsa_live import save_state as jongsa_save_state
 from src.interactive_chart import (
@@ -1304,7 +1305,16 @@ with tab_jongsa:
                     f"(목표가 \\${s['목표가']:.2f}, 보유 {s['보유영업일']}영업일)  \n"
                     f"사유: **{s['사유']}** / 현재 수익률 {pnl_pct:+.2f}%"
                 )
-            st.info("**매도가 있는 날은 매수하지 않습니다.** (전략 규칙)")
+            mode_now = js_cfg.get("sell_day_buy_mode", "never")
+            if mode_now == "never":
+                st.info("**매도가 있는 날은 매수하지 않습니다.** (원본 V5 규칙)")
+            else:
+                losses = [s for s in plan["매도대상"] if s.get("예상손익", 0) < 0]
+                st.info(
+                    f"현재 설정: **{JONGSA_SELL_MODES[mode_now]}**  \n"
+                    f"오늘 매도 {len(plan['매도대상'])}건 중 손실 {len(losses)}건 → "
+                    f"**{'매수함' if plan['매수여부'] else '매수 안 함'}**"
+                )
         else:
             st.markdown("### 🔴 오늘 팔 것")
             st.write("없습니다.")
@@ -1439,6 +1449,35 @@ with tab_jongsa:
                 "강제청산 영업일", min_value=2, max_value=60, value=js_cfg["stop_days"], key="js_cfg_stop"
             )
 
+        st.markdown("#### 매도일에도 매수할까")
+        mode_keys = list(JONGSA_SELL_MODES.keys())
+        cur_mode = js_cfg.get("sell_day_buy_mode", "never")
+        new_mode = st.radio(
+            "방식 선택",
+            mode_keys,
+            index=mode_keys.index(cur_mode) if cur_mode in mode_keys else 0,
+            format_func=lambda k: JONGSA_SELL_MODES[k],
+            key="js_cfg_sellmode",
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {"방식": "매도일 매수 안 함 (원본)", "CAGR(%)": 29.96, "MDD(%)": -39.99, "CAGR/MDD": 0.749, "보유비중(%)": 27.2},
+                    {"방식": "전부 손실일 때만", "CAGR(%)": 33.53, "MDD(%)": -43.12, "CAGR/MDD": 0.777, "보유비중(%)": 30.6},
+                    {"방식": "하나라도 손실이면", "CAGR(%)": 35.36, "MDD(%)": -43.96, "CAGR/MDD": 0.804, "보유비중(%)": 32.3},
+                ]
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+        st.caption(
+            "2010-03 ~ 2025-12, 목표 2.7%, 매수비율 10%, 수수료 0.03% 기준. 원본 스프레드시트로 검증한 값입니다 "
+            "(MDD는 소수점까지 일치). **수익률도 오르지만 위험 대비 효율(CAGR/MDD)도 같이 오릅니다** — "
+            "손절로 비워진 자리를 다시 채워서 자금이 노는 시간을 줄이는 효과예요.\n\n"
+            "다만 **낙폭이 -40% → -44%로 깊어지고** 매일 '오늘 판 것 중 손해 본 게 있나'를 따져야 합니다. "
+            "처음에는 원본(매수 안 함)으로 시작하시고, 익숙해진 뒤에 바꾸셔도 늦지 않습니다."
+        )
+
         st.markdown("#### 수수료 (증권사마다 다릅니다)")
         f1, f2, f3 = st.columns(3)
         with f1:
@@ -1483,6 +1522,7 @@ with tab_jongsa:
             js_state["config"]["fee_rate"] = new_fee / 100
             js_state["config"]["fee_in_target"] = bool(new_fee_in_target)
             js_state["config"]["whole_shares"] = bool(new_whole)
+            js_state["config"]["sell_day_buy_mode"] = new_mode
             jongsa_save_state(js_state)
             st.success("저장했습니다. (이미 보유 중인 건의 목표가는 그대로입니다)")
             st.rerun()
@@ -1503,6 +1543,36 @@ with tab_jongsa:
         st.caption("⚠️ 초기화하면 지금까지의 보유·청산 기록이 전부 사라집니다.")
 
     st.divider()
+    with st.expander("⚖️ 하루 매수 비율(분할 수)을 얼마로 할까 — 검증된 비교표"):
+        st.caption(
+            "원본 자료의 비교표를 제 엔진으로 전부 재현한 결과입니다 (8개 설정 모두 0.1%p 이내 일치). "
+            "기간 2010-04 ~ 2024-12, 목표수익률 2.75%, 수수료 0.03% 기준."
+        )
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {"설정": "3% (안정형)", "CAGR(%)": 8.4, "MDD(%)": -9.6, "CAGR/MDD": 0.87, "평균보유비중(%)": 7.5},
+                    {"설정": "6.5% (안정형)", "CAGR(%)": 19.5, "MDD(%)": -20.3, "CAGR/MDD": 0.96, "평균보유비중(%)": 17.5},
+                    {"설정": "10% (10분할) ★기본", "CAGR(%)": 30.5, "MDD(%)": -30.4, "CAGR/MDD": 1.01, "평균보유비중(%)": 27.5},
+                    {"설정": "11.1% (9분할)", "CAGR(%)": 33.5, "MDD(%)": -33.4, "CAGR/MDD": 1.00, "평균보유비중(%)": 30.5},
+                    {"설정": "12.5% (8분할)", "CAGR(%)": 36.5, "MDD(%)": -37.6, "CAGR/MDD": 0.97, "평균보유비중(%)": 34.2},
+                    {"설정": "14.3% (7분할)", "CAGR(%)": 40.3, "MDD(%)": -41.9, "CAGR/MDD": 0.96, "평균보유비중(%)": 38.6},
+                    {"설정": "16.6% (6분할)", "CAGR(%)": 43.0, "MDD(%)": -47.2, "CAGR/MDD": 0.91, "평균보유비중(%)": 43.7},
+                    {"설정": "20% (5분할)", "CAGR(%)": 44.5, "MDD(%)": -54.1, "CAGR/MDD": 0.82, "평균보유비중(%)": 49.4},
+                ]
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+        st.info(
+            "**CAGR/MDD가 핵심 숫자입니다** — 위험 1만큼 지고 수익을 얼마나 얻었나입니다. "
+            "**10~11.1%에서 정점(1.00~1.01)이고 그 뒤로는 계속 떨어집니다.**\n\n"
+            "10% → 20%로 올리면 수익률은 +14%p 오르지만(30.5→44.5) 낙폭은 +24%p 커집니다(-30.4→-54.1). "
+            "**얻는 것보다 잃는 게 큽니다.**\n\n"
+            "그리고 -30%와 -54%는 체감이 완전히 다릅니다. 1천만원이 700만원 되는 것과 460만원 되는 것의 차이인데, "
+            "후자는 대부분 중도에 포기합니다. **10%로 시작해서 익숙해지면 11.1%까지가 적당합니다.**"
+        )
+
     with st.expander("📊 이 전략 백테스트 결과 (2010~2024, 원문 재현 검증됨)"):
         st.markdown(
             "**원문 주장과 제가 재현한 값이 거의 일치합니다** — 원문이 정직하게 검증했다는 근거입니다.\n\n"

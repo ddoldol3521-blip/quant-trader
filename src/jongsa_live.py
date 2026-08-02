@@ -21,7 +21,27 @@ DEFAULT_CONFIG = {
     "fee_rate": 0.0,           # 편도 수수료 (증권사마다 다름). 0이면 무시된다
     "fee_in_target": True,     # 목표가에 왕복 수수료를 얹을지 (원본 스프레드시트 방식)
     "whole_shares": True,      # 정수주만 매수 (원본 스프레드시트 방식)
+    "sell_day_buy_mode": "never",  # 매도일에도 매수할지 — never / all_loss / any_loss
 }
+
+# 매도가 있는 날 매수를 허용하는 방식들. 손절로 청산된 자리는 목표 미달이니
+# 다시 진입한다는 발상이다. 수익률은 오르지만 낙폭도 깊어진다.
+SELL_DAY_MODES = {
+    "never": "매도일엔 매수 안 함 (원본 V5)",
+    "all_loss": "판 게 전부 손실일 때만 매수",
+    "any_loss": "판 것 중 손실이 하나라도 있으면 매수",
+}
+
+
+def should_buy_on_sell_day(sold_pnls: list, mode: str) -> bool:
+    """오늘 매도가 있었을 때 매수해도 되는지 판정."""
+    if not sold_pnls:
+        return True
+    if mode == "any_loss":
+        return any(p < 0 for p in sold_pnls)
+    if mode == "all_loss":
+        return all(p < 0 for p in sold_pnls)
+    return False
 
 
 def target_price_for(price: float, cfg: dict) -> float:
@@ -113,8 +133,17 @@ def daily_plan(state: dict, current_price: float, prev_total: float = None) -> d
         elif held >= 1 and current_price >= target:
             sells.append({**lot, "보유영업일": held, "사유": "목표 도달", "목표가": target})
 
-    # 매도가 있는 날은 매수하지 않는다
-    will_buy = len(sells) == 0
+    # 각 매도 건의 예상 손익 (매도일 매수 허용 판정에 쓴다)
+    fee_now = cfg.get("fee_rate", 0.0)
+    sold_pnls = [
+        s["qty"] * current_price * (1 - fee_now) - s["qty"] * s["buy_price"] * (1 + fee_now)
+        for s in sells
+    ]
+    for s, p in zip(sells, sold_pnls):
+        s["예상손익"] = p
+
+    mode = cfg.get("sell_day_buy_mode", "never")
+    will_buy = should_buy_on_sell_day(sold_pnls, mode)
 
     base = prev_total if prev_total is not None else total_assets(state, current_price)
     desired = base * cfg["daily_buy_pct"]
