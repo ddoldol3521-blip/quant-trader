@@ -18,6 +18,27 @@
 
 ---
 
+## 1.5단계 — 이메일 숨기기 (선택, 2분)
+
+Public 저장소에 올리면 **커밋에 적힌 이메일 주소가 공개**됩니다. 스팸이 걱정되면 GitHub가 주는 가짜 주소로 바꾸세요. **올리기 전에** 해야 합니다.
+
+1. https://github.com/settings/emails 접속
+2. **Keep my email addresses private** 체크
+3. 바로 위에 표시된 `12345678+사용자이름@users.noreply.github.com` 주소를 복사
+4. 아래 명령 실행 (복사한 주소로 바꿔서)
+
+```bash
+git config user.email "12345678+사용자이름@users.noreply.github.com"
+```
+
+```bash
+git filter-branch -f --env-filter 'export GIT_AUTHOR_EMAIL="12345678+사용자이름@users.noreply.github.com"; export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"' -- --all
+```
+
+두 번째 명령은 **이미 만들어둔 커밋들의 이메일까지** 바꿉니다. 아직 아무 데도 안 올렸으니 안전합니다.
+
+---
+
 ## 2단계 — 저장소(repository) 만들기 (3분)
 
 1. https://github.com/new 접속
@@ -51,11 +72,24 @@ git push -u origin main
 
 마지막 명령에서 **로그인 창이 뜹니다.**
 
-- 브라우저 창이 뜨면 → "Authorize" 눌러 허용
-- 검은 창에서 아이디/비밀번호를 물으면 → 비밀번호 자리에는 **일반 비밀번호가 아니라 토큰**이 필요합니다.
-  https://github.com/settings/tokens 에서 *Generate new token (classic)* → `repo` 체크 → 생성된 문자열을 붙여넣으세요.
+이 PC에는 Git Credential Manager가 설치돼 있어서, 보통 아래처럼 진행됩니다.
 
-성공하면 GitHub 저장소 페이지에 파일들이 보입니다.
+1. `Connect to GitHub` 창 → **Sign in with your browser** 클릭
+2. 브라우저가 열리며 GitHub 로그인 → **Authorize** 클릭
+3. 창이 자동으로 닫히고 업로드가 진행됨
+
+한 번 로그인하면 다음부터는 안 묻습니다.
+
+> 브라우저 방식이 안 되고 아이디/비밀번호를 물으면, 비밀번호 자리에는 **일반 비밀번호가 아니라 토큰**이 필요합니다.
+> https://github.com/settings/tokens 에서 *Generate new token (classic)* → `repo` 체크 → 생성된 문자열을 붙여넣으세요.
+
+성공하면 이런 메시지가 나옵니다:
+
+```
+branch 'main' set up to track 'origin/main'.
+```
+
+GitHub 저장소 페이지를 새로고침하면 파일들이 보입니다.
 
 ### 올라가지 않는 파일들
 
