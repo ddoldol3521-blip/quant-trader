@@ -9,6 +9,8 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 
+import pandas as pd
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 STATE_PATH = PROJECT_ROOT / "jongsa_positions.json"
 
@@ -107,6 +109,39 @@ def apply_preset(state: dict, preset_name: str) -> dict:
     for k in ("daily_buy_pct", "target_return", "stop_days", "sell_day_buy_mode"):
         state["config"][k] = p[k]
     state["config"]["preset_name"] = preset_name
+    save_state(state)
+    return state
+
+
+def import_from_backtest(state: dict, result, initial_cash: float, start_date: str) -> dict:
+    """과거부터 규칙대로 돌린 시뮬레이션 결과를 실제 기록으로 이어받는다.
+
+    예전부터 이 전략을 해온 사람이 매매 하나하나를 손으로 입력하지 않아도 되게 하려는 것.
+    시작일과 초기자금만 주면 그때부터 오늘까지를 자동으로 채운다.
+    """
+    state["cash"] = float(result.final_cash)
+    state["lots"] = [dict(l) for l in result.final_lots]
+
+    closed = []
+    if result.trades is not None and not result.trades.empty:
+        for _, t in result.trades.iterrows():
+            closed.append(
+                {
+                    "buy_date": pd.Timestamp(t["매수일"]).strftime("%Y-%m-%d"),
+                    "buy_price": float(t["매수가"]),
+                    "qty": float(t["수량"]),
+                    "target_price": float(t["매수가"]) * (1 + state["config"]["target_return"]),
+                    "sell_date": pd.Timestamp(t["매도일"]).strftime("%Y-%m-%d"),
+                    "sell_price": float(t["매도가"]),
+                    "pnl": float(t["손익"]),
+                    "return_pct": float(t["수익률(%)"]),
+                    "reason": str(t["청산사유"]),
+                }
+            )
+    state["closed"] = closed
+    state["config"]["initial_cash"] = float(initial_cash)
+    state["created"] = start_date
+    state["imported_from"] = {"start": start_date, "at": _today_str()}
     save_state(state)
     return state
 

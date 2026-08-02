@@ -41,7 +41,12 @@ class JongsaResult:
     num_trades: int
     num_target_sells: int
     num_forced_sells: int
+    daily_log: pd.DataFrame = field(default_factory=pd.DataFrame)
     days_below_dd: dict = field(default_factory=dict)
+    # 시뮬레이션이 끝난 시점에 남아 있는 보유분과 예수금.
+    # 과거부터 돌린 결과를 실제 기록으로 이어받을 때 쓴다.
+    final_lots: list = field(default_factory=list)
+    final_cash: float = 0.0
     max_open_lots: int = 0
     avg_open_lots: float = 0.0
     cash_exhausted_days: int = 0
@@ -99,6 +104,7 @@ def run_jongsa(
     equity = np.zeros(n)
     exposure = np.zeros(n)
     open_lot_counts = np.zeros(n, dtype=int)
+    log_rows = []  # 스프레드시트처럼 하루 한 줄씩 남긴다
 
     base_daily_amount = initial_cash / n_splits
     v4_daily_target = base_daily_amount
@@ -110,6 +116,9 @@ def run_jongsa(
 
     for t in range(n):
         price = close[t]
+        sell_qty_today = 0.0
+        sell_amt_today = 0.0
+        sell_reasons: list[str] = []
 
         # ---------- 1) 매도 판정 ----------
         did_sell = False
@@ -145,6 +154,9 @@ def run_jongsa(
                 )
                 did_sell = True
                 sold_pnls.append(pnl)
+                sell_qty_today += lot.qty
+                sell_amt_today += proceeds
+                sell_reasons.append(sell_reason)
             else:
                 remaining.append(lot)
         open_lots = remaining
@@ -200,6 +212,9 @@ def run_jongsa(
                 desired = season_seed if season_reseed else v4_daily_target
 
             buy_amount = min(desired, cash)
+            buy_qty_today = 0.0
+            buy_amt_today = 0.0
+            buy_target_today = None
             if buy_amount > 0 and cash > 0:
                 if buy_amount >= cash - 1e-9:
                     cash_exhausted += 1
@@ -224,6 +239,13 @@ def run_jongsa(
                         open_lots.append(
                             Lot(buy_day_idx=t, buy_price=price, qty=qty, target_price=tgt)
                         )
+                        buy_qty_today = qty
+                        buy_amt_today = spend
+                        buy_target_today = tgt
+        else:
+            buy_qty_today = 0.0
+            buy_amt_today = 0.0
+            buy_target_today = None
 
         # ---------- 3) 기록 ----------
         total = cash + shares * price
@@ -232,9 +254,34 @@ def run_jongsa(
         open_lot_counts[t] = len(open_lots)
         prev_total_assets = total
 
+        log_rows.append(
+            {
+                "날짜": dates[t],
+                "종가": round(price, 4),
+                "매수금액": round(buy_amt_today, 2) if buy_amt_today else None,
+                "매수수량": round(buy_qty_today) if buy_qty_today else None,
+                "목표가": round(buy_target_today, 2) if buy_target_today else None,
+                "매도수량": round(sell_qty_today) if sell_qty_today else None,
+                "매도금액": round(sell_amt_today, 2) if sell_amt_today else None,
+                "실현손익": round(float(realized_pnl[t]), 2) if sell_qty_today else None,
+                "청산사유": "+".join(sorted(set(sell_reasons))) if sell_reasons else None,
+                "보유수량": round(shares),
+                "보유건수": len(open_lots),
+                "평가금": round(shares * price, 2),
+                "예수금": round(cash, 2),
+                "총자산": round(total, 2),
+                "수익률(%)": round((total / initial_cash - 1) * 100, 2),
+            }
+        )
+
     equity_s = pd.Series(equity, index=dates, name="equity")
     exposure_s = pd.Series(exposure, index=dates, name="exposure")
     trades_df = pd.DataFrame(trades)
+
+    log_df = pd.DataFrame(log_rows)
+    if not log_df.empty:
+        run_max = log_df["총자산"].cummax()
+        log_df["최고자산대비(%)"] = ((log_df["총자산"] / run_max - 1) * 100).round(2)
 
     cagr, mdd, dd = _metrics(equity_s, initial_cash, n)
 
@@ -252,6 +299,7 @@ def run_jongsa(
         equity_curve=equity_s,
         exposure_curve=exposure_s,
         trades=trades_df,
+        daily_log=log_df,
         cagr_pct=cagr,
         mdd_pct=mdd,
         win_rate_pct=win_rate,
@@ -260,6 +308,16 @@ def run_jongsa(
         num_target_sells=n_target,
         num_forced_sells=n_forced,
         days_below_dd=days_below,
+        final_lots=[
+            {
+                "buy_date": dates[l.buy_day_idx].strftime("%Y-%m-%d"),
+                "buy_price": float(l.buy_price),
+                "qty": float(l.qty),
+                "target_price": float(l.target_price),
+            }
+            for l in open_lots
+        ],
+        final_cash=float(cash),
         max_open_lots=int(open_lot_counts.max()),
         avg_open_lots=float(open_lot_counts.mean()),
         cash_exhausted_days=cash_exhausted,

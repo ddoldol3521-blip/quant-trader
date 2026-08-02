@@ -18,7 +18,7 @@ from src.jongsa_backtest import run_jongsa
 from src.jongsa_live import PRESETS, SELL_DAY_MODES
 from src.jongsa_live import apply_preset
 from src.jongsa_live import business_days_between as bdays
-from src.jongsa_live import daily_plan, load_state, performance
+from src.jongsa_live import daily_plan, import_from_backtest, load_state, performance
 from src.jongsa_live import record_buy, record_sell, reset_state, save_state
 
 st.set_page_config(page_title="종사종팔 V5", page_icon="🔁", layout="wide")
@@ -35,7 +35,9 @@ def load_price_history(ticker: str, start: str, end: str) -> pd.DataFrame:
 st.title("🔁 종사종팔 V5")
 st.caption(f"{cfg['ticker']} 분할매매 — 오늘 뭘 할지만 알려줍니다. 주문은 증권사 앱에서 직접 하세요.")
 
-tab_today, tab_bt, tab_set = st.tabs(["📅 오늘 할 일", "📊 백테스트", "⚙️ 설정"])
+tab_today, tab_sim, tab_bt, tab_set = st.tabs(
+    ["📅 오늘 할 일", "🕐 과거부터 시작했다면", "📊 백테스트", "⚙️ 설정"]
+)
 
 # ================================================================= 오늘 할 일
 with tab_today:
@@ -322,6 +324,148 @@ with tab_today:
             )
         st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         st.caption("보유일은 주말만 제외한 근사치입니다 (미국 공휴일 미반영).")
+
+# ================================================================= 과거부터 시작했다면
+with tab_sim:
+    st.markdown("## 🕐 과거부터 시작했다면 지금 얼마?")
+    st.caption(
+        "시작일과 초기자금만 넣으면, 그날부터 오늘까지 **규칙대로 했을 때 결과**를 하루하루 계산합니다. "
+        "예전부터 해오셨다면 매매를 하나하나 입력할 필요 없이 **여기서 한 번에 기록을 채울 수 있습니다.**"
+    )
+
+    sc1, sc2, sc3 = st.columns([1, 1, 1])
+    with sc1:
+        sim_start = st.date_input("시작일", value=date(2025, 1, 2), key="sim_start")
+    with sc2:
+        sim_cash = st.number_input("초기 투자금($)", min_value=100.0, value=10000.0, step=1000.0, key="sim_cash")
+    with sc3:
+        st.write("")
+        run_sim = st.button("계산하기", type="primary", width="stretch")
+
+    st.caption(
+        f"적용 규칙 — 매수비율 {cfg['daily_buy_pct']*100:.1f}% · 목표 {cfg['target_return']*100:.2f}% · "
+        f"청산 {cfg['stop_days']}영업일 · {SELL_DAY_MODES[cfg.get('sell_day_buy_mode','never')]} "
+        f"· 수수료 {cfg.get('fee_rate',0)*100:.4f}%  (설정 탭에서 변경)"
+    )
+
+    if run_sim:
+        try:
+            with st.spinner("과거 시세 받아서 하루씩 계산 중..."):
+                sim_hist = load_price_history(
+                    cfg["ticker"], sim_start.isoformat(), date.today().isoformat()
+                )
+                sim_res = run_jongsa(
+                    sim_hist, "V5",
+                    initial_cash=sim_cash,
+                    target_return=cfg["target_return"],
+                    daily_buy_pct=cfg["daily_buy_pct"],
+                    stop_days=int(cfg["stop_days"]),
+                    fee_rate=cfg.get("fee_rate", 0.0),
+                    whole_shares=cfg.get("whole_shares", True),
+                    fee_in_target=cfg.get("fee_in_target", True),
+                    sell_day_buy_mode=cfg.get("sell_day_buy_mode", "never"),
+                )
+                st.session_state["sim_res"] = sim_res
+                st.session_state["sim_cash_used"] = sim_cash
+                st.session_state["sim_start_used"] = sim_start.isoformat()
+        except Exception as e:
+            st.error(f"계산 실패: {e}")
+
+    sim_res = st.session_state.get("sim_res")
+    if sim_res is not None:
+        used_cash = st.session_state["sim_cash_used"]
+        used_start = st.session_state["sim_start_used"]
+        final = sim_res.final_value
+        profit = final - used_cash
+        log = sim_res.daily_log
+
+        st.markdown("### 결과")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("지금 총자산", f"${final:,.2f}", f"{profit:+,.2f}")
+        k2.metric("총 수익률", f"{(final/used_cash-1)*100:+.2f}%")
+        k3.metric("최대 낙폭", f"{sim_res.mdd_pct:.2f}%")
+        k4.metric("승률", f"{sim_res.win_rate_pct:.1f}%")
+
+        st.success(
+            f"**{used_start}에 \\${used_cash:,.0f}으로 시작했다면, 오늘 \\${final:,.2f}입니다.** "
+            f"({profit:+,.2f} / {(final/used_cash-1)*100:+.2f}%)"
+        )
+
+        k5, k6, k7, k8 = st.columns(4)
+        k5.metric("총 매매", f"{sim_res.num_trades}회")
+        k6.metric("익절", f"{sim_res.num_target_sells}회")
+        k7.metric("손절", f"{sim_res.num_forced_sells}회")
+        k8.metric("현재 보유", f"{len(sim_res.final_lots)}건")
+
+        # ---- 일별 상세 (스프레드시트) ----
+        st.markdown("### 📋 일별 상세")
+        st.caption("구글 스프레드시트처럼 하루 한 줄입니다. 표 안에서 스크롤·정렬·검색 가능하고, 우측 상단 아이콘으로 CSV 저장도 됩니다.")
+
+        f1, f2 = st.columns([1, 3])
+        with f1:
+            only_action = st.checkbox("매매한 날만 보기", value=False, key="sim_only_action")
+        with f2:
+            buy_days = int(log["매수수량"].notna().sum())
+            sell_days = int(log["매도수량"].notna().sum())
+            st.caption(
+                f"전체 {len(log)}거래일 · 매수한 날 {buy_days}일 · 매도한 날 {sell_days}일  "
+                f"(매도한 날은 매수하지 않으므로 둘을 더하면 대체로 전체 일수가 됩니다)"
+            )
+
+        show = log.copy()
+        if only_action:
+            show = show[show["매수수량"].notna() | show["매도수량"].notna()]
+        show = show.sort_values("날짜", ascending=False)
+        show["날짜"] = pd.to_datetime(show["날짜"]).dt.strftime("%Y-%m-%d")
+
+        st.dataframe(
+            show,
+            width="stretch",
+            hide_index=True,
+            height=520,
+            column_config={
+                "종가": st.column_config.NumberColumn(format="$%.2f"),
+                "매수금액": st.column_config.NumberColumn(format="$%.2f"),
+                "목표가": st.column_config.NumberColumn(format="$%.2f"),
+                "매도금액": st.column_config.NumberColumn(format="$%.2f"),
+                "실현손익": st.column_config.NumberColumn(format="$%.2f"),
+                "평가금": st.column_config.NumberColumn(format="$%.2f"),
+                "예수금": st.column_config.NumberColumn(format="$%.2f"),
+                "총자산": st.column_config.NumberColumn(format="$%.2f"),
+                "수익률(%)": st.column_config.NumberColumn(format="%.2f%%"),
+                "최고자산대비(%)": st.column_config.NumberColumn(format="%.2f%%"),
+            },
+        )
+
+        st.markdown("### 자산 추이")
+        st.line_chart(pd.DataFrame({"총자산": sim_res.equity_curve}))
+
+        # ---- 기록으로 가져오기 ----
+        st.divider()
+        st.markdown("### 📥 이 결과를 내 기록으로 가져오기")
+        st.caption(
+            "예전부터 이 전략을 해오셨다면, 매매를 하나하나 입력하지 않고 여기서 한 번에 채울 수 있습니다. "
+            "가져오면 **'오늘 할 일' 탭이 이어서 작동**합니다."
+        )
+        st.warning(
+            f"가져오면 현재 보유 {len(state['lots'])}건 · 청산기록 {len(state['closed'])}건이 "
+            f"**시뮬레이션 결과(보유 {len(sim_res.final_lots)}건 · 청산 {sim_res.num_trades}건)로 교체**됩니다."
+        )
+        ic1, ic2 = st.columns([1, 2])
+        with ic1:
+            confirm_import = st.checkbox("교체에 동의", key="sim_confirm")
+        with ic2:
+            if st.button("내 기록으로 가져오기", disabled=not confirm_import, width="stretch"):
+                import_from_backtest(state, sim_res, used_cash, used_start)
+                st.success("가져왔습니다. '오늘 할 일' 탭에서 이어서 쓰시면 됩니다.")
+                st.rerun()
+
+        st.caption(
+            "⚠️ 실제 매매와 다를 수 있습니다 — 체결가는 모두 종가로 가정했고, 미국 공휴일·배당은 반영하지 않았습니다. "
+            "실제로 거래하셨다면 증권사 기록을 기준으로 보정하세요."
+        )
+    else:
+        st.info("시작일과 초기자금을 정하고 **계산하기**를 누르세요. 데이터 받는 데 10~20초 걸립니다.")
 
 # ================================================================= 백테스트
 with tab_bt:
