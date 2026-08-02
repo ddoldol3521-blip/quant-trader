@@ -29,6 +29,14 @@ from src.scheduler import (
     remove_windows_task,
     save_schedule_config,
 )
+from src.playbook import (
+    RESEARCH_DATE,
+    RESEARCH_SCOPE,
+    YEARLY_TOP_RULE_KR,
+    combo_to_strategies,
+    get_baseline,
+    get_playbook,
+)
 from src.screening import scan as scan_stocks
 from src.strategies import STRATEGIES
 from src.strategy_comparison import compare_strategies, summarize_comparison
@@ -177,6 +185,7 @@ def render_take_profit_controls(prefix: str):
     tab_portfolio,
     tab_market,
     tab_notify,
+    tab_playbook,
     tab_research,
 ) = st.tabs(
     [
@@ -193,6 +202,7 @@ def render_take_profit_controls(prefix: str):
         "포트폴리오 백테스트",
         "시장 상황판",
         "텔레그램 알림",
+        "📋 매매 플레이북",
         "전략 추천 (리서치)",
     ]
 )
@@ -1083,6 +1093,140 @@ with tab_notify:
                 st.error(f"예약 삭제 실패: {e}")
 
     st.caption("이 컴퓨터가 켜져 있고 로그인된 상태여야 실행됩니다 (윈도우 작업 스케줄러 사용).")
+
+# ---------------------------------------------------------------- 매매 플레이북
+with tab_playbook:
+    st.subheader("📋 매매 플레이북 — 검증을 통과한 규칙")
+    st.caption(
+        f"{RESEARCH_DATE} 실행한 대규모 리서치 결과입니다. 대상: {RESEARCH_SCOPE}. "
+        "45개 전략조합 × 5개 보유기간 × 4개 시대구간을 전부 검증했습니다."
+    )
+
+    st.success(
+        "**핵심 발견 한 줄**: `이격도(disparity) + 스토캐스틱(stochastic)`이 **두 신호가 같은 날 동시에** 뜨는 조합이, "
+        "**한국과 미국 양쪽에서 각각 독립적으로** 검증을 통과한 유일한 규칙입니다."
+    )
+
+    pb = get_playbook(REGION)
+
+    if not pb:
+        st.warning("이 시장은 검증 통과 규칙이 없습니다.")
+    else:
+        st.markdown(f"### {REGION} 시장 — 통과 규칙 {len(pb)}개")
+        st.caption(
+            "**초과수익**은 '아무 날에나 샀을 때'보다 얼마나 더 벌었는지입니다. 이게 핵심 숫자예요 — "
+            "그냥 시장이 올라서 번 건 빼고 계산한 값입니다."
+        )
+
+        pb_df = pd.DataFrame(pb)
+        pb_df["매수 조건"] = pb_df["조합"]
+        pb_df["매도 시점"] = pb_df["보유일"].apply(lambda d: f"{d}거래일 뒤 (약 {round(d/21) if d>=21 else round(d/5)}{'개월' if d>=21 else '주'})")
+        show = pb_df[
+            ["등급", "매수 조건", "매도 시점", "초과수익(%p)", "초과승률(%p)", "통과기간수", "표본수"]
+        ]
+        st.dataframe(show, width="stretch", hide_index=True)
+
+        st.caption(
+            "**등급**: A+ = 4개 시대구간 전부 통과 / A = 3개 통과 / B = 2개 통과. "
+            "**통과기간수**가 높을수록 특정 시기 운이 아닐 가능성이 큽니다."
+        )
+
+        st.divider()
+        st.markdown("### 이 규칙을 오늘 적용하면?")
+        st.caption("위 규칙 중 하나를 골라서, 오늘 그 조건에 맞는 종목이 있는지 찾아봅니다.")
+
+        rule_labels = [
+            f"[{r['등급']}] {r['조합']} → {r['보유일']}일 보유 (초과수익 +{r['초과수익(%p)']}%p)" for r in pb
+        ]
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            picked = st.selectbox("규칙 선택", rule_labels, key=f"pb_rule_{REGION}")
+        with c2:
+            pb_limit = st.number_input(
+                "시장별 상위 몇 개", min_value=10, max_value=300, value=100, step=10, key="pb_limit"
+            )
+
+        pb_markets = st.multiselect("시장", SUB_MARKETS, default=DEFAULT_SUB, key=f"pb_markets_{REGION}")
+        picked_rule = pb[rule_labels.index(picked)]
+        picked_strats = combo_to_strategies(picked_rule["조합"])
+
+        st.info(
+            f"**선택한 규칙**\n\n"
+            f"🟢 **살 때**: {' 그리고 '.join(picked_strats)} 신호가 **같은 날 동시에** 뜬 종목\n\n"
+            f"🔴 **팔 때**: 산 날로부터 **{picked_rule['보유일']}거래일 뒤** (전략 신호와 무관하게 시간으로 청산)\n\n"
+            f"📊 과거 성적: 기준선 대비 수익률 **+{picked_rule['초과수익(%p)']}%p**, "
+            f"승률 **+{picked_rule['초과승률(%p)']}%p** (표본 {picked_rule['표본수']:,}건)"
+        )
+
+        if st.button("오늘 이 조건에 맞는 종목 찾기", key="pb_scan"):
+            if not pb_markets:
+                st.warning("시장을 하나 이상 선택하세요.")
+            else:
+                with st.spinner("스캔 중..."):
+                    results = scan_stocks(
+                        pb_markets, picked_strats, limit=pb_limit, show_progress=False, region=REGION
+                    )
+                hits = [
+                    r for r in results if all(r["signals"].get(s) == "BUY" for s in picked_strats)
+                ]
+                st.write(f"**조건 충족 종목: {len(hits)}개** (전체 {len(results)}개 중)")
+                if hits:
+                    from datetime import date as _date
+
+                    st.dataframe(
+                        pd.DataFrame(
+                            [
+                                {
+                                    "종목": f"{h['name']}({h['code']})",
+                                    "매수 신호": "오늘 발생",
+                                    "권장 매도": f"{picked_rule['보유일']}거래일 뒤",
+                                }
+                                for h in hits
+                            ]
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                    st.caption(
+                        "⚠️ 자동 주문되지 않습니다. 이 목록을 참고해서 본인이 증권사 앱에서 직접 매매하세요."
+                    )
+                else:
+                    st.info(
+                        "오늘은 조건에 맞는 종목이 없습니다. "
+                        "두 신호가 같은 날 겹치는 건 흔치 않아요 — 며칠에 한 번씩 확인해보세요."
+                    )
+
+    st.divider()
+    st.markdown("### 대표 규칙의 연도별 성적 (한국, 이격도+스토캐스틱, 60일 보유)")
+    yearly = pd.DataFrame(YEARLY_TOP_RULE_KR)
+    st.dataframe(yearly, width="stretch", hide_index=True)
+    st.success(
+        f"**13년 중 13년 전부 플러스**였습니다. 신호가 특정 해에 몰리지도 않았어요 "
+        f"(가장 많은 해가 전체의 12%). 이건 '한 시기 운'이 아니라는 근거입니다."
+    )
+
+    baseline = get_baseline(REGION)
+    if baseline:
+        with st.expander("비교 기준선 — 아무 날에나 샀을 때 (이걸 넘어야 의미가 있음)"):
+            st.dataframe(pd.DataFrame(baseline), width="stretch", hide_index=True)
+            st.caption(
+                "예를 들어 60일 보유 기준선이 +8.66%인데, 어떤 전략이 +9%를 냈다면 "
+                "실질 초과수익은 0.34%p뿐입니다. 그냥 시장이 오른 거예요."
+            )
+
+    st.warning(
+        "⚠️ **꼭 알아야 할 것**\n\n"
+        "**1. 이건 '추세추종은 안 통한다'는 뜻이 아닙니다.** "
+        "통과한 규칙이 전부 '싸졌을때 줍기'(평균회귀)인 이유는, 이 검증이 **'사고 N일 뒤에 판다'**는 "
+        "방식이기 때문이에요. 골든크로스·모멘텀 같은 추세추종은 '신호가 꺼질 때까지 오래 들고 가는' 방식이라 "
+        "이 틀에서는 불리합니다. 질문이 다르면 답도 다릅니다.\n\n"
+        "**2. 생존편향은 여전히 남아 있습니다.** 종목을 '오늘 기준 큰 회사'로 뽑았기 때문에, "
+        "그 시절 망한 회사가 빠져 있어요. 실제로는 이 표보다 성적이 낮았을 겁니다.\n\n"
+        "**3. 초과수익 1~5%p는 큰 숫자가 아닙니다.** 수수료·세금·슬리피지를 빼면 더 줄어듭니다. "
+        "'이걸로 부자 된다'가 아니라 '동전 던지기보다 아주 조금 낫다' 정도로 보세요.\n\n"
+        "**4. 미국은 통과 규칙이 훨씬 적었고(4개), 2023년 이후 구간에서는 하나도 통과하지 못했습니다.** "
+        "최근 미국 시장에서는 이 방식이 잘 안 통했다는 뜻입니다."
+    )
 
 # ---------------------------------------------------------------- 전략 추천 (리서치)
 with tab_research:
