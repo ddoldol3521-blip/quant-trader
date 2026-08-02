@@ -17,13 +17,23 @@
 
 ## 실행 방법
 
-바탕화면의 **"퀀트트레이더 웹"** 바로가기를 더블클릭하면 브라우저(`http://localhost:8501`)가 자동으로 열립니다.
+앱이 **두 개**입니다. 바탕화면 바로가기를 더블클릭하면 됩니다.
+
+| 바로가기 | 용도 | 포트 |
+|---|---|---|
+| **종사종팔 V5** | 매일 쓰는 것. SOXL 분할매매 '오늘 뭘 할지'만 | 8502 |
+| **퀀트트레이더 웹** | 분석 도구 모음 (백테스트·스캔·상황판 등 15개 탭) | 8501 |
+
+**매일 매매하실 거면 "종사종팔 V5"만 켜면 됩니다.**
 
 직접 실행하려면:
 
 ```powershell
+.venv\Scripts\python.exe -m streamlit run jongsa_app.py --server.port 8502
 .venv\Scripts\python.exe -m streamlit run app.py
 ```
+
+두 앱은 같은 `jongsa_positions.json`을 쓰지 않도록 분리돼 있습니다 — 종사종팔 기록은 전용 앱에서만 관리합니다.
 
 ## 처음 설치할 때
 
@@ -101,9 +111,13 @@ src/charts.py, plotting.py   matplotlib 자산곡선 + 한글 폰트
 src/telegram_notify.py       텔레그램 전송
 src/scheduler.py             윈도우 작업 스케줄러 연동
 src/ssl_fix.py               한글 경로 SSL 인증서 문제 우회
-app.py                       Streamlit 웹앱 (14개 탭)
+src/jongsa_backtest.py       종사종팔 V4/V5 백테스트 엔진
+src/jongsa_live.py           종사종팔 실전 상태관리 (오늘 할 일 계산)
+app.py                       분석용 웹앱 (15개 탭)
+jongsa_app.py                종사종팔 V5 전용 앱 (매일 쓰는 것)
 scripts/daily_scan_notify.py 예약 실행용 스캔+알림 진입점
-run_web.bat                  바탕화면 바로가기가 가리키는 실행 파일
+run_web.bat                  '퀀트트레이더 웹' 바로가기가 실행하는 파일
+run_jongsa.bat               '종사종팔 V5' 바로가기가 실행하는 파일
 ```
 
 ## 알아둬야 할 한계
