@@ -23,26 +23,43 @@ from src.jongsa_live import order_plan, target_price_for
 
 st.set_page_config(page_title="종사종팔 V5", page_icon="🔁", layout="wide")
 
-# 여백을 줄여 화면을 꽉 채운다. 스트림릿 기본값은 위아래 패딩이 크다.
+# 여백을 줄여 화면을 꽉 채우고, 밝은 바탕에 맞게 경계선을 정리한다.
 st.markdown(
     """
 <style>
-  .block-container {padding: 0.8rem 1.2rem 1rem 1.2rem; max-width: 100%;}
+  .block-container {padding: 0.7rem 1.2rem 1rem 1.2rem; max-width: 100%;}
+
+  /* 숫자 카드 — 흰 카드에 옅은 테두리 */
   [data-testid="stMetric"] {
-      background: rgba(128,128,128,0.07);
-      border: 1px solid rgba(128,128,128,0.22);
-      border-radius: 8px; padding: 8px 12px;
+      background: #FFFFFF;
+      border: 1px solid #E3E7EF;
+      border-radius: 10px; padding: 10px 14px;
+      box-shadow: 0 1px 2px rgba(16,24,40,0.04);
   }
-  [data-testid="stMetricLabel"] p {font-size: 0.78rem; opacity: 0.8;}
-  [data-testid="stMetricValue"] {font-size: 1.45rem;}
+  [data-testid="stMetricLabel"] p {font-size: 0.78rem; color: #667085;}
+  [data-testid="stMetricValue"] {font-size: 1.4rem; font-weight: 600;}
+
   [data-testid="stVerticalBlock"] {gap: 0.55rem;}
   [data-testid="stHorizontalBlock"] {gap: 0.6rem;}
   hr {margin: 0.5rem 0 !important;}
-  h1 {font-size: 1.6rem; margin-bottom: 0.1rem;}
-  h3 {font-size: 1.05rem; margin: 0.3rem 0 0.2rem 0;}
-  .stDataFrame {border-radius: 6px;}
-  div[data-testid="stExpander"] {border-radius: 8px;}
-  .stCaption, [data-testid="stCaptionContainer"] p {margin-bottom: 0.15rem;}
+  h1 {font-size: 1.55rem; margin-bottom: 0.1rem;}
+  h2 {font-size: 1.2rem; margin: 0.5rem 0 0.3rem 0;}
+  h3 {font-size: 1.02rem; margin: 0.4rem 0 0.2rem 0;}
+
+  /* 탭 — 선택된 탭이 확실히 보이게 */
+  .stTabs [data-baseweb="tab-list"] {gap: 2px; border-bottom: 1px solid #E3E7EF;}
+  .stTabs [data-baseweb="tab"] {
+      padding: 8px 16px; border-radius: 8px 8px 0 0; font-weight: 500;
+  }
+  .stTabs [aria-selected="true"] {background: #EEF2FF;}
+
+  /* 표 */
+  .stDataFrame {border-radius: 8px; border: 1px solid #E3E7EF;}
+  div[data-testid="stExpander"] {border-radius: 10px; border-color: #E3E7EF;}
+  [data-testid="stCaptionContainer"] p {margin-bottom: 0.15rem; color: #667085;}
+
+  /* 알림 박스 여백 축소 */
+  [data-testid="stAlert"] {padding: 0.6rem 0.9rem;}
 </style>
 """,
     unsafe_allow_html=True,
@@ -509,7 +526,7 @@ if short_period:
     )
 
 tab_home, tab_grid, tab_year, tab_help = st.tabs(
-    ["📅 오늘 할 일", "📋 일별 기록", "📊 연도별 성과", "📖 규칙 · 설정"]
+    ["📅 오늘 할 일 (주문 시트)", "📋 일별 기록", "📊 백테스트", "📖 규칙 · 설정"]
 )
 
 # ============================================================ 오늘 할 일
@@ -606,7 +623,7 @@ with tab_home:
             f"미체결이면 아무것도 안 하시면 됩니다."
         )
 
-    b1, b2 = st.columns([1.15, 1])
+    b1, b2 = st.columns([1.25, 1])
     with b1:
         st.markdown(f"### 📦 현재 보유 ({len(res.final_lots)}건)")
         if res.final_lots:
@@ -635,14 +652,15 @@ with tab_home:
         else:
             st.caption("보유 중인 건이 없습니다.")
 
+    with b2:
         st.markdown("### 🧾 최근 매매")
-        rt = res.trades.tail(8).iloc[::-1].copy()
+        rt = res.trades.tail(10).iloc[::-1].copy()
         if not rt.empty:
             rt["매도일"] = pd.to_datetime(rt["매도일"]).dt.strftime("%m-%d")
             rt["매수일"] = pd.to_datetime(rt["매수일"]).dt.strftime("%m-%d")
             st.dataframe(
                 rt[["매수일", "매도일", "수량", "매수가", "매도가", "손익", "수익률(%)", "청산사유"]],
-                width="stretch", hide_index=True, height=320,
+                width="stretch", hide_index=True, height=min(390, 45 + 35 * len(rt)),
                 column_config={
                     "매수가": st.column_config.NumberColumn(format="$%.2f"),
                     "매도가": st.column_config.NumberColumn(format="$%.2f"),
@@ -650,68 +668,13 @@ with tab_home:
                     "수익률(%)": st.column_config.NumberColumn(format="%+.2f%%"),
                 },
             )
-
-    with b2:
-        st.markdown("### 📈 자산 추이")
-        st.line_chart(pd.DataFrame({"총자산": res.equity_curve}), height=310)
-        st.markdown("### 💵 현금 vs 주식")
-        st.area_chart(
-            pd.DataFrame({
-                "주식": log.set_index(pd.to_datetime(log["날짜"]))["평가금"],
-                "현금": log.set_index(pd.to_datetime(log["날짜"]))["예수금"],
-            }),
-            height=310,
-        )
-
-    # ---------- 존버 vs 전략 ----------
-    st.markdown("### 🐢 존버 vs 전략")
-    st.caption(
-        f"**존버** = 첫날 시드 전액으로 {ticker}를 사서 그냥 놔둔 경우입니다. "
-        "입출금도 똑같이 반영해서 공정하게 비교합니다. **이 전략을 할 이유가 있는지 여기서 판단하세요.**"
-    )
-
-    bh_final = float(bh_curve.iloc[-1])
-    bh_dd = float(((bh_curve / bh_curve.cummax()) - 1).min() * 100)
-    bh_ret = (bh_final / put_in - 1) * 100 if put_in > 0 else float("nan")
-
-    v1, v2 = st.columns([1.35, 1])
-    with v1:
-        st.line_chart(
-            pd.DataFrame({"전략": res.equity_curve, f"존버 ({ticker} 그냥 보유)": bh_curve}),
-            height=330,
-        )
-    with v2:
-        st.dataframe(
-            pd.DataFrame([
-                {"항목": "지금 총자산", "전략": f"${total:,.0f}", "존버": f"${bh_final:,.0f}"},
-                {"항목": "순손익", "전략": f"${profit:+,.0f}", "존버": f"${bh_final - put_in:+,.0f}"},
-                {"항목": "수익률", "전략": f"{res.net_return_pct:+.1f}%", "존버": f"{bh_ret:+.1f}%"},
-                {"항목": "최대 낙폭", "전략": f"{res.mdd_pct:.1f}%", "존버": f"{bh_dd:.1f}%"},
-                {"항목": "주식 보유 비중", "전략": f"{res.avg_exposure_pct:.0f}%", "존버": "100%"},
-            ]),
-            width="stretch", hide_index=True, height=220,
-        )
-        if bh_final > total:
-            st.warning(
-                f"**이 기간에는 존버가 ${bh_final - total:,.0f} 더 벌었습니다.** "
-                f"대신 존버는 한때 {bh_dd:.0f}%까지 빠졌고 이 전략은 {res.mdd_pct:.0f}%였습니다. "
-                f"돈이 반토막 나는 걸 버틸 수 있냐가 갈림길입니다."
-            )
         else:
-            st.success(
-                f"**이 기간에는 전략이 ${total - bh_final:,.0f} 더 벌었습니다.** "
-                f"낙폭도 존버 {bh_dd:.0f}% 대비 {res.mdd_pct:.0f}%로 얕았습니다."
-            )
-
-    st.caption(
-        f"평균적으로 자산의 **{res.avg_exposure_pct:.0f}%만 주식**이고 나머지는 현금입니다. "
-        "존버보다 수익이 낮게 나와도 이상한 게 아니라, 돈의 일부만 넣고 얻은 결과라는 뜻입니다. "
-        "**낙폭과 같이 보세요.**"
-    )
+            st.caption("아직 청산된 매매가 없습니다.")
 
     st.caption(
         "⏰ LOC/MOC는 **미 동부 15:50(한국시간 새벽 4:50, 서머타임 해제 시 5:50)** 까지 넣어야 합니다. "
-        "저녁에 미리 걸어두면 됩니다. · 보유일은 주말만 제외한 근사치라 미국 공휴일은 반영되지 않습니다."
+        "저녁에 미리 걸어두면 됩니다. · 보유일은 주말만 제외한 근사치라 미국 공휴일은 반영되지 않습니다. "
+        "· 성과 그래프와 존버 비교는 **📊 백테스트** 탭에 있습니다."
     )
 
 # ============================================================ 일별 기록
@@ -756,67 +719,172 @@ with tab_grid:
         "실제 거래하셨다면 증권사 기록이 우선입니다."
     )
 
-# ============================================================ 연도별
-with tab_year:
-    # 연도별 수익률은 TWR 곡선으로 계산한다. 실제 자산 곡선을 쓰면
-    # 그 해에 입금한 금액까지 '수익'으로 잡혀 버린다.
-    eq, close = res.twr_curve, hist["Close"]
-    tr = res.trades.copy()
+# ============================================================ 백테스트
+def year_table(twr, close_s, trades, tk):
+    """연도별 성과표. 수익률은 TWR 기준(입출금 효과 제거)."""
+    tr = trades.copy()
     if not tr.empty:
         tr["연도"] = pd.to_datetime(tr["매도일"]).dt.year
-
-    rows = []
-    _years = sorted(set(eq.index.year))
-    for yr, grp in eq.groupby(eq.index.year):
-        if len(grp) < 5:  # 며칠뿐이면 의미가 없다. 그 이상이면 바로 줄을 만든다
+    rows, years = [], sorted(set(twr.index.year))
+    for yr, grp in twr.groupby(twr.index.year):
+        if len(grp) < 5:
             continue
-        bh = close.loc[grp.index]
+        bh = close_s.loc[grp.index]
         yt = tr[tr["연도"] == yr] if not tr.empty else pd.DataFrame()
-        # 아직 안 끝난 해와 중간부터 시작한 해는 표시해준다
-        partial = "  (진행중)" if yr == _years[-1] else ("  (일부)" if yr == _years[0] and len(grp) < 200 else "")
+        partial = "  (진행중)" if yr == years[-1] else (
+            "  (일부)" if yr == years[0] and len(grp) < 200 else "")
         rows.append({
             "연도": f"{yr}{partial}",
             "수익률(%)": round((grp.iloc[-1] / grp.iloc[0] - 1) * 100, 1),
             "연내 MDD(%)": round(((grp - grp.cummax()) / grp.cummax()).min() * 100, 1),
             "승률(%)": round((yt["손익"] > 0).mean() * 100, 1) if len(yt) else None,
             "매매": len(yt),
-            f"존버({ticker}) 수익률(%)": round((bh.iloc[-1] / bh.iloc[0] - 1) * 100, 1),
+            f"존버({tk}) 수익률(%)": round((bh.iloc[-1] / bh.iloc[0] - 1) * 100, 1),
         })
-    ydf = pd.DataFrame(rows)
+    return pd.DataFrame(rows)
 
-    yc1, yc2 = st.columns([1.1, 1])
-    with yc1:
-        st.dataframe(ydf, width="stretch", hide_index=True, height=min(430, 60 + 36 * len(ydf)))
-    with yc2:
-        m = st.columns(3)
-        m[0].metric("CAGR", "—" if short_period else f"{res.cagr_pct:.2f}%")
-        m[1].metric("MDD", f"{res.mdd_pct:.2f}%")
-        m[2].metric(
-            "효율",
-            "—" if (short_period or not res.mdd_pct) else f"{res.cagr_pct / -res.mdd_pct:.2f}",
-        )
-        st.line_chart(
-            pd.DataFrame({"이 전략": res.equity_curve, f"존버 ({ticker})": bh_curve}),
-            height=330,
-        )
-        if has_flows:
-            st.caption("표의 연도별 수치는 입출금 효과를 뺀 값이고, 위 그래프는 실제 자산 금액입니다.")
 
-    # 요약은 온전히 채워진 해만 쓴다 ('일부'·'진행중' 표시된 해 제외)
+def show_result(r, h, bh, tk, put, label):
+    """백테스트 결과 한 벌을 그린다 (지표 -> 연도별 -> 존버 비교)."""
+    short = pd.isna(r.cagr_pct)
+    m = st.columns(5)
+    m[0].metric("최종 자산", f"${r.final_value:,.0f}")
+    m[1].metric("총 수익률", f"{r.net_return_pct:+.1f}%")
+    m[2].metric("연평균(CAGR)", "—" if short else f"{r.cagr_pct:.2f}%")
+    m[3].metric("최대 낙폭(MDD)", f"{r.mdd_pct:.2f}%")
+    m[4].metric("효율 (CAGR/MDD)",
+                "—" if (short or not r.mdd_pct) else f"{r.cagr_pct / -r.mdd_pct:.2f}")
+    st.caption(
+        f"{label} · 매매 {r.num_trades}회 (익절 {r.num_target_sells} / 손절 {r.num_forced_sells})"
+        f" · 승률 {r.win_rate_pct:.1f}% · 평균 주식비중 {r.avg_exposure_pct:.0f}%"
+    )
+
+    ydf = year_table(r.twr_curve, h["Close"], r.trades, tk)
+    c1, c2 = st.columns([1.05, 1])
+    with c1:
+        st.markdown("##### 연도별 성과")
+        st.dataframe(ydf, width="stretch", hide_index=True,
+                     height=min(400, 60 + 36 * max(len(ydf), 1)))
+    with c2:
+        st.markdown("##### 자산 추이 — 전략 vs 존버")
+        st.line_chart(pd.DataFrame({"전략": r.equity_curve, f"존버({tk})": bh}), height=340)
+
     full = ydf[~ydf["연도"].astype(str).str.contains(r"\(")] if not ydf.empty else ydf
     if len(full) >= 2:
         st.info(
             f"**온전한 {len(full)}개년 중 {int((full['수익률(%)'] > 0).sum())}년 플러스** · "
             f"평균 {full['수익률(%)'].mean():.1f}% · 최고 {full['수익률(%)'].max():.1f}% / "
-            f"최저 {full['수익률(%)'].min():.1f}% · 연내 낙폭 평균 {full['연내 MDD(%)'].mean():.1f}% "
-            f"(최악 {full['연내 MDD(%)'].min():.1f}%) — **(일부)·(진행중)** 표시된 해는 제외했습니다"
+            f"최저 {full['수익률(%)'].min():.1f}% · 연내 낙폭 평균 "
+            f"{full['연내 MDD(%)'].mean():.1f}% (최악 {full['연내 MDD(%)'].min():.1f}%) "
+            f"— (일부)·(진행중) 표시된 해는 제외"
         )
-    _bhdd = ((bh_curve / bh_curve.cummax()) - 1).min() * 100
-    st.caption(
-        f"같은 기간 존버({ticker})는 {(close.iloc[-1]/close.iloc[0]-1)*100:,.0f}% 올랐지만 "
-        f"한때 {_bhdd:.1f}%까지 빠졌습니다. 이 전략은 {res.mdd_pct:.1f}%. "
-        "수익률만 보지 말고 낙폭 차이를 꼭 같이 보세요."
-    )
+
+    bhf = float(bh.iloc[-1])
+    bhdd = float(((bh / bh.cummax()) - 1).min() * 100)
+    d1, d2 = st.columns([1, 1.4])
+    with d1:
+        st.dataframe(pd.DataFrame([
+            {"항목": "최종 자산", "전략": f"${r.final_value:,.0f}", "존버": f"${bhf:,.0f}"},
+            {"항목": "순손익", "전략": f"${r.net_profit:+,.0f}", "존버": f"${bhf - put:+,.0f}"},
+            {"항목": "수익률", "전략": f"{r.net_return_pct:+.1f}%",
+             "존버": f"{(bhf / put - 1) * 100:+.1f}%" if put > 0 else "—"},
+            {"항목": "최대 낙폭", "전략": f"{r.mdd_pct:.1f}%", "존버": f"{bhdd:.1f}%"},
+            {"항목": "주식 비중", "전략": f"{r.avg_exposure_pct:.0f}%", "존버": "100%"},
+        ]), width="stretch", hide_index=True, height=220)
+    with d2:
+        if bhf > r.final_value:
+            st.warning(
+                f"**이 기간엔 존버가 \\${bhf - r.final_value:,.0f} 더 벌었습니다.** "
+                f"대신 존버는 한때 **{bhdd:.0f}%** 까지 빠졌고 이 전략은 **{r.mdd_pct:.0f}%** 였습니다.\n\n"
+                f"이 전략은 평균 자산의 **{r.avg_exposure_pct:.0f}%만 주식**이고 나머지는 현금입니다. "
+                f"상승장에서 존버에 지는 건 정상입니다. **낙폭 차이를 보고 판단하세요.**"
+            )
+        else:
+            st.success(
+                f"**이 기간엔 전략이 \\${r.final_value - bhf:,.0f} 더 벌었습니다.** "
+                f"낙폭도 존버 {bhdd:.0f}% 대비 **{r.mdd_pct:.0f}%** 로 얕았습니다."
+            )
+
+
+with tab_year:
+    bt1, bt2 = st.tabs(["🧪 조건 바꿔서 돌려보기", "📌 내 설정 그대로"])
+
+    # ---------- 조건을 직접 바꿔서 ----------
+    with bt1:
+        st.caption(
+            "**여기서 바꾼 값은 실제 설정에 영향을 주지 않습니다.** "
+            "맨 위 내 설정은 그대로 두고, 이 조건으로만 과거를 돌려봅니다."
+        )
+        e1, e2, e3, e4 = st.columns(4)
+        with e1:
+            b_ticker = st.text_input("종목", value=ticker, key="bt_tk").strip().upper()
+        with e2:
+            b_start = st.date_input("시작일", value=date(2011, 1, 3),
+                                    min_value=date(2010, 3, 11),
+                                    max_value=date.today() - timedelta(days=1), key="bt_st")
+        with e3:
+            b_seed = st.number_input("시드 ($)", 100.0, value=10000.0, step=1000.0, key="bt_sd")
+        with e4:
+            b_splits = st.number_input("분할수", 2, 60, int(splits), key="bt_sp")
+
+        e5, e6, e7, e8 = st.columns(4)
+        with e5:
+            b_tgt = st.number_input("목표수익률 (%)", 0.5, 20.0, float(tgt_pct), 0.05, key="bt_tg")
+        with e6:
+            b_stop = st.number_input("청산 영업일", 2, 60, int(stop_days), key="bt_sv")
+        with e7:
+            b_fee = st.number_input("수수료 (%)", 0.0, 1.0, float(fee_pct), 0.001,
+                                    format="%.4f", key="bt_fe")
+        with e8:
+            b_re = st.radio("수익 재투자", [True, False], index=0 if reinvest else 1,
+                            format_func=lambda v: "⭕ 복리" if v else "❌ 고정",
+                            horizontal=True, key="bt_re")
+
+        run = st.button("▶ 이 조건으로 백테스트", type="primary", width="stretch")
+
+        if run:
+            st.session_state.bt_args = (
+                b_ticker, b_start.isoformat(), date.today().isoformat(), float(b_seed),
+                1 / b_splits, b_tgt / 100, int(b_stop), b_fee / 100,
+                cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
+                cfg.get("sell_day_buy_mode", "never"), bool(b_re), (),
+            )
+
+        args = st.session_state.get("bt_args")
+        if args:
+            try:
+                with st.spinner("돌리는 중..."):
+                    br, bh_, bbh = simulate(*args)
+            except Exception as ex:
+                st.error(f"백테스트 실패: {ex}")
+            else:
+                st.divider()
+                show_result(
+                    br, bh_, bbh, args[0], args[3],
+                    f"**{args[0]}** {args[1]} ~ {bh_.index[-1].date()} · 시드 \\${args[3]:,.0f} · "
+                    f"{round(1 / args[4])}분할 · 목표 {args[5] * 100:.2f}% · 청산 {args[6]}일 · "
+                    f"{'복리' if args[11] else '고정'}",
+                )
+                if (args[0] != ticker or abs(args[4] - daily_pct) > 1e-9
+                        or abs(args[5] - tgt_pct / 100) > 1e-9 or args[6] != int(stop_days)):
+                    st.caption(
+                        f"↑ 내 실제 설정({ticker} · {splits}분할 · 목표 {tgt_pct:.2f}% · "
+                        f"청산 {stop_days}일)과 다른 조건입니다. 실제 설정은 안 바뀌었습니다."
+                    )
+        else:
+            st.info("조건을 정하고 **▶ 이 조건으로 백테스트** 를 누르세요. 데이터 받는 데 10~20초 걸립니다.")
+
+    # ---------- 내 설정 그대로 ----------
+    with bt2:
+        st.caption(
+            f"맨 위에 넣으신 설정 그대로입니다 — **{ticker}** · 시작 {start_d} · 시드 \\${seed:,.0f} · "
+            f"{splits}분할 · 목표 {tgt_pct:.2f}% · 청산 {stop_days}영업일 · "
+            f"{'복리' if reinvest else '재투자 안 함'}"
+        )
+        show_result(res, hist, bh_curve, ticker, put_in,
+                    f"{start_d} ~ {price_date} · 거래일 {len(log)}일")
+        if has_flows:
+            st.caption("연도별 수치는 입출금 효과를 뺀 값이고, 그래프는 실제 자산 금액입니다.")
 
 # ============================================================ 규칙 · 설정
 with tab_help:

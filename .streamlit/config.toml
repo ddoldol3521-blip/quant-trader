@@ -2,5 +2,10 @@
 gatherUsageStats = false
 
 [theme]
-base = "dark"
-primaryColor = "#4F8BF9"
+# 눈이 편한 밝은 회색 바탕 + 진한 남색 글씨.
+# 순백은 눈부시고 순검정은 답답해서 둘 다 살짝 죽였다.
+base = "light"
+backgroundColor = "#FCFCFD"
+secondaryBackgroundColor = "#F1F3F7"
+textColor = "#1B2230"
+primaryColor = "#2563EB"
