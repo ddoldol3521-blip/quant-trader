@@ -178,8 +178,9 @@ with r1c3:
         help="하루에 총자산의 1/분할수 만큼 산다. 10분할 = 10%. 추천은 10분할.",
     )
 with r1c4:
-    # 최소 한 달치는 있어야 계산이 되므로 범위를 그렇게 잡는다
-    _lo, _hi = date(2010, 3, 11), date.today() - timedelta(days=30)
+    # 상한을 넉넉히 잡아 막지 않는다. 기간이 너무 짧으면 아래 계산에서
+    # 며칠 이전으로 잡아야 하는지 알려준다 (무조건 막으면 왜 안 되는지 알 수 없다).
+    _lo, _hi = date(2010, 3, 11), date.today()
     _saved = pd.Timestamp(cfg.get("start_date") or "2025-01-02").date()
     start_d = st.date_input("시작일", value=min(max(_saved, _lo), _hi), min_value=_lo, max_value=_hi)
 
@@ -270,7 +271,17 @@ try:
             cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
         )
 except Exception as e:
-    st.error(f"계산 실패: {e}  — 종목코드와 시작일을 확인하세요.")
+    if "데이터가 너무 짧습니다" in str(e):
+        # 10영업일 청산 규칙을 한 번은 돌려봐야 결과가 나온다
+        need_days = int((int(stop_days) + 2) * 1.5) + 4
+        st.error(
+            f"**기간이 너무 짧습니다.** 청산 규칙이 {stop_days}영업일이라 최소 그만큼은 지나야 "
+            f"결과가 나옵니다.\n\n"
+            f"시작일을 **{(date.today() - timedelta(days=need_days)).isoformat()}** 이전으로 잡아보세요. "
+            f"(청산 영업일을 줄이면 더 최근 날짜도 됩니다)"
+        )
+    else:
+        st.error(f"계산 실패: {e}  — 종목코드와 시작일을 확인하세요.")
     st.stop()
 
 for _note in res.flow_notes:
