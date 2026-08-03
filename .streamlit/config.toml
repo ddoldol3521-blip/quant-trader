@@ -2,10 +2,5 @@
 gatherUsageStats = false
 
 [theme]
-# 흰 바탕에 검은 글씨. 화면을 어둡게 덮지 않고, 칸과 칸 사이를
-# 검은 선으로 갈라서 구분한다 (테두리·구분선은 jongsa_app.py의 CSS).
-base = "light"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F4F5F8"
-textColor = "#14181F"
-primaryColor = "#14181F"
+base = "dark"
+primaryColor = "#4F8BF9"
