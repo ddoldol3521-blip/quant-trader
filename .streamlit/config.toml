@@ -2,10 +2,10 @@
 gatherUsageStats = false
 
 [theme]
-# 눈이 편한 밝은 회색 바탕 + 진한 남색 글씨.
-# 순백은 눈부시고 순검정은 답답해서 둘 다 살짝 죽였다.
+# 바깥은 어둡게, 글을 읽는 안쪽은 밝게 (검은 책상 위의 흰 종이).
+# 글씨가 어두워야 하니 base는 light로 두고, 바깥 배경만 CSS로 어둡게 칠한다.
 base = "light"
-backgroundColor = "#FCFCFD"
-secondaryBackgroundColor = "#F1F3F7"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F2F4F8"
 textColor = "#1B2230"
 primaryColor = "#2563EB"

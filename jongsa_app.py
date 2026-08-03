@@ -27,7 +27,19 @@ st.set_page_config(page_title="종사종팔 V5", page_icon="🔁", layout="wide"
 st.markdown(
     """
 <style>
-  .block-container {padding: 0.7rem 1.2rem 1rem 1.2rem; max-width: 100%;}
+  /* 바깥은 어둡게, 읽는 안쪽만 밝게 — 검은 책상 위에 흰 종이 */
+  .stApp, [data-testid="stAppViewContainer"] {background: #0F1218;}
+  [data-testid="stHeader"] {background: #0F1218;}
+  [data-testid="stToolbar"] {color: #9AA4B2;}
+
+  .block-container {
+      background: #FFFFFF;
+      max-width: 1560px;
+      padding: 1.1rem 1.4rem 1.6rem 1.4rem;
+      margin: 0.6rem auto 1.2rem auto;
+      border-radius: 14px;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.35);
+  }
 
   /* 숫자 카드 — 흰 카드에 옅은 테두리 */
   [data-testid="stMetric"] {
@@ -810,69 +822,104 @@ with tab_year:
     bt1, bt2 = st.tabs(["🧪 조건 바꿔서 돌려보기", "📌 내 설정 그대로"])
 
     # ---------- 조건을 직접 바꿔서 ----------
+    # 백테스트 설정은 내 설정과 완전히 별개로 들고 간다.
+    # 위젯 기본값을 내 설정에 묶어두면 맨 위를 건드릴 때 여기 값도 따라 움직여서
+    # '따로 돌려보는' 의미가 없어진다. 그래서 자체 딕셔너리에 저장한다.
+    if "btcfg" not in st.session_state:
+        st.session_state.btcfg = {
+            "ticker": cfg["ticker"], "start": "2011-01-03", "seed": 10000.0,
+            "splits": 10, "tgt": 2.75, "stop": 10, "fee": 0.0, "reinvest": True,
+        }
+    bt = st.session_state.btcfg
+
     with bt1:
-        st.caption(
-            "**여기서 바꾼 값은 실제 설정에 영향을 주지 않습니다.** "
-            "맨 위 내 설정은 그대로 두고, 이 조건으로만 과거를 돌려봅니다."
-        )
+        h1, h2 = st.columns([3, 1])
+        with h1:
+            st.caption(
+                "**내 설정과 완전히 따로 노는 화면입니다.** 여기서 뭘 바꾸든 맨 위 내 설정과 "
+                "'오늘 할 일'은 그대로입니다. 값을 바꾸면 바로 다시 계산됩니다."
+            )
+        with h2:
+            if st.button("📥 내 설정 복사해오기", width="stretch"):
+                st.session_state.btcfg = {
+                    "ticker": ticker, "start": start_d.isoformat(), "seed": float(seed),
+                    "splits": int(splits), "tgt": float(tgt_pct), "stop": int(stop_days),
+                    "fee": float(fee_pct), "reinvest": bool(reinvest),
+                }
+                st.rerun()
+
         e1, e2, e3, e4 = st.columns(4)
         with e1:
-            b_ticker = st.text_input("종목", value=ticker, key="bt_tk").strip().upper()
+            bt["ticker"] = st.text_input("종목", value=bt["ticker"], key="bt_tk").strip().upper()
         with e2:
-            b_start = st.date_input("시작일", value=date(2011, 1, 3),
-                                    min_value=date(2010, 3, 11),
-                                    max_value=date.today() - timedelta(days=1), key="bt_st")
+            _b = st.date_input(
+                "시작일", value=pd.Timestamp(bt["start"]).date(),
+                min_value=date(2010, 3, 11), max_value=date.today() - timedelta(days=1),
+                key="bt_st",
+            )
+            bt["start"] = _b.isoformat()
         with e3:
-            b_seed = st.number_input("시드 ($)", 100.0, value=10000.0, step=1000.0, key="bt_sd")
+            bt["seed"] = st.number_input("시드 ($)", 100.0, value=float(bt["seed"]),
+                                         step=1000.0, key="bt_sd")
         with e4:
-            b_splits = st.number_input("분할수", 2, 60, int(splits), key="bt_sp")
+            bt["splits"] = st.number_input("분할수", 2, 60, int(bt["splits"]), key="bt_sp")
 
         e5, e6, e7, e8 = st.columns(4)
         with e5:
-            b_tgt = st.number_input("목표수익률 (%)", 0.5, 20.0, float(tgt_pct), 0.05, key="bt_tg")
+            bt["tgt"] = st.number_input("목표수익률 (%)", 0.5, 20.0, float(bt["tgt"]),
+                                        0.05, key="bt_tg")
         with e6:
-            b_stop = st.number_input("청산 영업일", 2, 60, int(stop_days), key="bt_sv")
+            bt["stop"] = st.number_input("청산 영업일", 2, 60, int(bt["stop"]), key="bt_sv")
         with e7:
-            b_fee = st.number_input("수수료 (%)", 0.0, 1.0, float(fee_pct), 0.001,
-                                    format="%.4f", key="bt_fe")
+            bt["fee"] = st.number_input("수수료 (%)", 0.0, 1.0, float(bt["fee"]), 0.001,
+                                        format="%.4f", key="bt_fe")
         with e8:
-            b_re = st.radio("수익 재투자", [True, False], index=0 if reinvest else 1,
-                            format_func=lambda v: "⭕ 복리" if v else "❌ 고정",
-                            horizontal=True, key="bt_re")
-
-        run = st.button("▶ 이 조건으로 백테스트", type="primary", width="stretch")
-
-        if run:
-            st.session_state.bt_args = (
-                b_ticker, b_start.isoformat(), date.today().isoformat(), float(b_seed),
-                1 / b_splits, b_tgt / 100, int(b_stop), b_fee / 100,
-                cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
-                cfg.get("sell_day_buy_mode", "never"), bool(b_re), (),
+            bt["reinvest"] = st.radio(
+                "수익 재투자", [True, False], index=0 if bt["reinvest"] else 1,
+                format_func=lambda v: "⭕ 복리" if v else "❌ 고정",
+                horizontal=True, key="bt_re",
             )
 
-        args = st.session_state.get("bt_args")
-        if args:
-            try:
-                with st.spinner("돌리는 중..."):
-                    br, bh_, bbh = simulate(*args)
-            except Exception as ex:
-                st.error(f"백테스트 실패: {ex}")
-            else:
-                st.divider()
-                show_result(
-                    br, bh_, bbh, args[0], args[3],
-                    f"**{args[0]}** {args[1]} ~ {bh_.index[-1].date()} · 시드 \\${args[3]:,.0f} · "
-                    f"{round(1 / args[4])}분할 · 목표 {args[5] * 100:.2f}% · 청산 {args[6]}일 · "
-                    f"{'복리' if args[11] else '고정'}",
-                )
-                if (args[0] != ticker or abs(args[4] - daily_pct) > 1e-9
-                        or abs(args[5] - tgt_pct / 100) > 1e-9 or args[6] != int(stop_days)):
-                    st.caption(
-                        f"↑ 내 실제 설정({ticker} · {splits}분할 · 목표 {tgt_pct:.2f}% · "
-                        f"청산 {stop_days}일)과 다른 조건입니다. 실제 설정은 안 바뀌었습니다."
-                    )
+        # 내 설정과 어디가 다른지 한눈에
+        diffs = []
+        if bt["ticker"] != ticker:
+            diffs.append(f"종목 {ticker} → {bt['ticker']}")
+        if bt["start"] != start_d.isoformat():
+            diffs.append(f"시작일 {start_d} → {bt['start']}")
+        if abs(bt["seed"] - seed) > 1e-9:
+            diffs.append(f"시드 ${seed:,.0f} → ${bt['seed']:,.0f}")
+        if int(bt["splits"]) != int(splits):
+            diffs.append(f"{splits}분할 → {int(bt['splits'])}분할")
+        if abs(bt["tgt"] - tgt_pct) > 1e-9:
+            diffs.append(f"목표 {tgt_pct:.2f}% → {bt['tgt']:.2f}%")
+        if int(bt["stop"]) != int(stop_days):
+            diffs.append(f"청산 {stop_days}일 → {int(bt['stop'])}일")
+        if bool(bt["reinvest"]) != bool(reinvest):
+            diffs.append(f"재투자 {'O' if reinvest else 'X'} → {'O' if bt['reinvest'] else 'X'}")
+
+        if diffs:
+            st.caption("**내 설정과 다른 점** — " + " · ".join(diffs))
         else:
-            st.info("조건을 정하고 **▶ 이 조건으로 백테스트** 를 누르세요. 데이터 받는 데 10~20초 걸립니다.")
+            st.caption("지금은 내 설정과 같은 조건입니다. 값을 바꿔가며 비교해보세요.")
+
+        try:
+            with st.spinner("돌리는 중..."):
+                br, bh_, bbh = simulate(
+                    bt["ticker"], bt["start"], date.today().isoformat(), float(bt["seed"]),
+                    1 / int(bt["splits"]), bt["tgt"] / 100, int(bt["stop"]), bt["fee"] / 100,
+                    cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
+                    cfg.get("sell_day_buy_mode", "never"), bool(bt["reinvest"]), (),
+                )
+        except Exception as ex:
+            st.error(f"백테스트 실패: {ex}  — 종목코드와 시작일을 확인하세요.")
+        else:
+            st.divider()
+            show_result(
+                br, bh_, bbh, bt["ticker"], float(bt["seed"]),
+                f"**{bt['ticker']}** {bt['start']} ~ {bh_.index[-1].date()} · "
+                f"시드 \\${bt['seed']:,.0f} · {int(bt['splits'])}분할 · 목표 {bt['tgt']:.2f}% · "
+                f"청산 {int(bt['stop'])}일 · {'복리' if bt['reinvest'] else '고정'}",
+            )
 
     # ---------- 내 설정 그대로 ----------
     with bt2:
