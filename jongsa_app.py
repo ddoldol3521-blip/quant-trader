@@ -16,7 +16,7 @@ import streamlit as st
 
 from src.data.kr_data import get_kr_ohlcv
 from src.jongsa_backtest import run_buy_and_hold, run_jongsa
-from src.jongsa_live import PRESETS, SELL_DAY_MODES
+from src.jongsa_live import BUY_RANGE_MISS_RATE, PRESETS, SELL_DAY_MODES
 from src.jongsa_live import business_days_between as bdays
 from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
 from src.jongsa_live import order_plan, target_price_for
@@ -63,6 +63,8 @@ _URL_KEYS = {
     "f": ("fee_rate", None),        # %로 넣고 소수로 바꾼다
     "ri": ("reinvest", None),       # 1 / 0
     "m": ("sell_day_buy_mode", str),
+    "mo": ("moc_available", None),   # 1 / 0
+    "br": ("buy_range_pct", None),   # % 로 넣고 소수로 바꾼다
 }
 
 
@@ -96,9 +98,9 @@ def cfg_from_url(base: dict) -> dict:
         try:
             if key == "n":
                 cfg["daily_buy_pct"] = 1 / int(raw)
-            elif key in ("r", "f"):
+            elif key in ("r", "f", "br"):
                 cfg[name] = float(raw) / 100
-            elif key == "ri":
+            elif key in ("ri", "mo"):
                 cfg[name] = raw not in ("0", "false", "False")
             else:
                 cfg[name] = caster(raw)
@@ -119,6 +121,8 @@ def cfg_to_url(cfg: dict, flows: list) -> None:
         "f": f"{cfg['fee_rate'] * 100:g}",
         "ri": "1" if cfg["reinvest"] else "0",
         "m": cfg["sell_day_buy_mode"],
+        "mo": "1" if cfg.get("moc_available", True) else "0",
+        "br": f"{cfg.get('buy_range_pct', 0.10) * 100:g}",
     }
     if flows:
         params["c"] = flows_to_param(flows)
@@ -159,22 +163,30 @@ RULES_MD = """
 
 ### 2) 살 것 — 하루 **{pct}%** ({splits}분할)
 
-**"판 게 있는 날은 사지 않는다."** 이게 이 전략의 핵심 규칙입니다.
+**매수는 항상 LOC입니다. MOC는 매도에만 씁니다.**
+지정가를 무엇으로 잡느냐만 두 가지로 갈립니다.
 
-> ❓ **그런데 오늘 팔릴지 안 팔릴지 주문 넣을 땐 모르잖아요?**
->
-> 그래서 이렇게 겁니다:
->
-> ### 매수 LOC 지정가 = (오늘 팔릴 수 있는 목표가 중 **가장 낮은 값**) − $0.01
+| 상황 | 매수 LOC 지정가 |
+|---|---|
+| **팔 물량이 없다** (첫날, 다 팔린 다음날) | 어제 종가 × (1 + **매수 범위 {rng}%**) |
+| **팔 물량이 있다** | (**매도 목표가 중 가장 낮은 값**) − $0.01 |
+
+**"판 게 있는 날은 사지 않는다"** 가 핵심 규칙인데, 주문 넣을 때는 오늘 종가를 모릅니다.
+그래서 아래 지정가가 그 규칙을 대신 지켜줍니다.
+
+> ### 매수 LOC = (최저 목표가) − $0.01
 >
 > - 종가가 목표가에 **닿으면** → 매도 체결, **매수는 자동 미체결** ✅
 > - 종가가 목표가에 **안 닿으면** → 매도 없음, **매수만 체결** ✅
 >
-> 주문 하나로 규칙이 저절로 지켜집니다.
+> 주문 하나로 **매수와 매도 중 하나만** 일어납니다.
 
-**손절일(10영업일)이 걸린 날**은 가격과 상관없이 무조건 파는 날이라, **매수 주문 자체를 넣지 않습니다.** 날짜만 보면 미리 알 수 있어요.
+**매수 범위란** — 팔 물량이 없는 날엔 위 장치를 쓸 수 없으니, 대신 "어제보다 {rng}% 넘게 오른 날은 안 산다"는 상한을 둡니다. 카페에서는 **+5~10%** 를 씁니다.
 
-**보유한 게 하나도 없으면** 그냥 **MOC 매수**하면 됩니다.
+**손절일({stop}영업일)이 걸린 날**은 가격과 무관하게 무조건 파는 날이라, **매수 주문을 아예 넣지 않습니다.** 날짜만 보면 미리 알 수 있어요.
+
+> 💡 **LOC 지정가는 '살 가격'이 아니라 '살지 말지의 기준'입니다.**
+> 실제 체결은 언제나 **그날 종가**로 됩니다. 지정가 $126에 걸어도 종가가 $115면 $115에 삽니다.
 
 ---
 
@@ -421,10 +433,18 @@ except Exception as e:
     f4.metric("목표가", f"${first_target:,.2f}", f"+{tgt_pct:.2f}%")
 
     st.markdown("### 📋 오늘 넣을 주문")
+    _rng = cfg.get("buy_range_pct", 0.10)
+    _limit = round(px * (1 + _rng), 2)
     st.success(
-        f"### {ticker} **{first_qty:,.0f}주** 매수 — **MOC(종가 시장가)**\n\n"
+        f"### {ticker} **{first_qty:,.0f}주** 매수 — **LOC 지정가 \\${_limit:,.2f}**\n\n"
         f"약 **\\${first_cost:,.2f}** 어치입니다. "
-        f"**처음이라 보유한 게 없으니 팔 것도 없고**, 그래서 그냥 종가에 사면 됩니다."
+        f"지정가 = 어제 종가 \\${px:,.2f} × (1 + **매수 범위 {_rng*100:.0f}%**)"
+    )
+    st.caption(
+        f"**처음이라 팔 물량이 없으니** 매수 범위를 씌워서 겁니다. "
+        f"어제 종가보다 {_rng*100:.0f}% 넘게 오르면 안 사고 넘어갑니다. "
+        f"그 안에서 마감하면 **종가에** 체결됩니다 (지정가에 사는 게 아닙니다). "
+        f"매수 범위는 **규칙·설정 탭**에서 바꿀 수 있습니다."
     )
     st.markdown(
         f"""
@@ -454,6 +474,7 @@ except Exception as e:
         st.markdown(RULES_MD.format(
             tgt=f"{tgt_pct:.2f}", stop=int(stop_days), splits=int(splits),
             pct=f"{daily_pct*100:.1f}", ticker=ticker,
+            rng=f"{cfg.get('buy_range_pct', 0.10)*100:.0f}",
         ))
     st.stop()
 
@@ -531,9 +552,10 @@ with tab_home:
         if forced or pending:
             rows = []
             for s in forced:
+                alt = s.get("대체지정가")
                 rows.append({
-                    "주문": "🛑 MOC 매도",
-                    "지정가": "— (무조건 체결)",
+                    "주문": "🛑 LOC 매도" if alt else "🛑 MOC 매도",
+                    "지정가": f"${alt:.2f} (사실상 무조건)" if alt else "— (무조건 체결)",
                     "수량": f"{s['qty']:,.0f}주",
                     "매수일": s["buy_date"],
                     "매수가": f"${s['buy_price']:.2f}",
@@ -575,10 +597,18 @@ with tab_home:
                 "지정가를 넘어 자동으로 미체결됩니다. 안 닿으면 매도 없이 매수만 됩니다. "
                 "**'판 날은 안 산다'는 규칙이 주문 하나로 지켜집니다.**"
             )
-        elif buy["type"] == "MOC":
+        elif buy["type"] == "LOC_RANGE":
+            _rng = cfg.get("buy_range_pct", 0.10)
             st.info(
-                f"### {buy['qty']:,.0f}주 매수 — **MOC 종가 시장가**\n\n"
-                f"약 **\\${buy['cost']:,.2f}** · {buy['reason']}"
+                f"### {buy['qty']:,.0f}주 매수 — **LOC 지정가 \\${buy['limit']:.2f}**\n\n"
+                f"약 **\\${buy['cost']:,.2f}** · 오늘은 팔 물량이 없습니다. "
+                f"지정가 = 어제 종가 \\${price:,.2f} × (1 + **매수 범위 {_rng*100:.0f}%**)"
+            )
+            st.caption(
+                f"**매수 범위란** — 어제 종가보다 {_rng*100:.0f}% 넘게 오른 날은 사지 않겠다는 뜻입니다. "
+                f"그 안에서 마감하면 **종가에** 체결됩니다 (지정가에 사는 게 아닙니다). "
+                f"과거 SOXL 기준 하루에 +{_rng*100:.0f}% 넘긴 날은 "
+                f"{BUY_RANGE_MISS_RATE.get(round(_rng, 2), 0):.2f}%였습니다."
             )
         else:
             st.error(f"### 오늘은 매수 없음\n\n{buy['reason']}")
@@ -838,6 +868,7 @@ with tab_help:
         st.markdown(RULES_MD.format(
             tgt=f"{tgt_pct:.2f}", stop=int(stop_days), splits=int(splits),
             pct=f"{daily_pct*100:.1f}", ticker=ticker,
+            rng=f"{cfg.get('buy_range_pct', 0.10)*100:.0f}",
         ))
         st.markdown("### ❓ LOC / MOC가 뭔가요")
         st.markdown(
@@ -890,6 +921,29 @@ with tab_help:
             index=mode_keys.index(cfg.get("sell_day_buy_mode", "never")),
             format_func=lambda k: SELL_DAY_MODES[k],
         )
+        br = st.slider(
+            "매수 범위 (%)", 3, 30, int(round(cfg.get("buy_range_pct", 0.10) * 100)),
+            help="팔 물량이 없는 날 LOC 매수를 어제 종가보다 몇 % 위에 걸지. 그보다 더 오르면 안 삽니다.",
+        )
+        _miss = BUY_RANGE_MISS_RATE.get(round(br / 100, 2))
+        st.caption(
+            f"어제 종가보다 **{br}% 넘게 오른 날은 사지 않습니다.** "
+            + (f"과거 SOXL에서 그런 날은 전체의 **{_miss:.2f}%** 였습니다. " if _miss else "")
+            + "카페에서는 **+5~10%** 를 씁니다. **매수 안 되는 게 손해는 아닙니다** — "
+            "그만큼 급등한 날은 안 사는 게 이 설정의 취지입니다."
+        )
+
+        moc = st.checkbox(
+            "내 증권사에 **MOC(종가 시장가)**가 있다", cfg.get("moc_available", True),
+            help="손절일 매도에만 씁니다. 없으면 LOC로 대신하는 방법을 알려줍니다.",
+        )
+        if not moc:
+            st.success(
+                "**LOC만 있어도 됩니다.** 매수는 원래 LOC라 문제없고, "
+                "**손절일 매도**만 LOC로 대신합니다 (종가보다 30% 아래 지정가 = 사실상 무조건 체결).\n\n"
+                "**LOC는 지정가가 아니라 종가에 체결**되므로 싸게 파는 게 아닙니다. "
+                "지정가는 '체결 여부'만 정합니다."
+            )
         s1, s2 = st.columns(2)
         with s1:
             fit = st.checkbox("목표가에 수수료 반영", cfg.get("fee_in_target", True),
@@ -898,7 +952,11 @@ with tab_help:
             ws = st.checkbox("정수주만 매수", cfg.get("whole_shares", True),
                              help="소수점 주식을 못 사는 증권사면 켜세요.")
         if st.button("세부 설정 저장", width="stretch"):
-            cfg.update({"sell_day_buy_mode": m, "fee_in_target": bool(fit), "whole_shares": bool(ws)})
+            cfg.update({
+                "sell_day_buy_mode": m, "fee_in_target": bool(fit),
+                "whole_shares": bool(ws), "moc_available": bool(moc),
+                "buy_range_pct": br / 100,
+            })
             save_config(cfg)
             st.rerun()
 

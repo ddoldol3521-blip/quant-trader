@@ -40,7 +40,22 @@ DEFAULT_CONFIG = {
     "whole_shares": True,      # 정수주만 매수 (원본 스프레드시트 방식)
     "sell_day_buy_mode": "never",  # 매도일에도 매수할지 — never / all_loss / any_loss
     "reinvest": True,          # 번 돈까지 굴릴지(복리) / 하루 매수금을 시드 기준으로 고정할지
+    "moc_available": True,     # 증권사에 MOC(종가 시장가)가 있는지. 손절 매도에만 쓴다
+    # '매수 범위' — 팔 물량이 없는 날 LOC 매수를 어디에 걸지.
+    # 전날 종가보다 이 비율까지 올라도 사겠다는 뜻. 원본 시트의 설정값이다.
+    # (원작자 답변: "매도 물량이 있을 때는 매수가를 최저매도가-0.01로 해서
+    #  매수나 매도만 생기게 되어있어요 / 시즌 첫 주문은 매수 범위 적용 되구요")
+    "buy_range_pct": 0.10,
 }
+
+# 매수 범위를 얼마로 잡아야 '사실상 무조건 체결'인지 참고용.
+# LOC는 지정가가 아니라 '종가'에 체결되므로 넉넉히 벌려도 더 비싸게 사지 않는다.
+# SOXL 2010-2026 4,123거래일, 전일 종가 대비 당일 종가 변동 기준 미체결 위험:
+#   +10% -> 163일(3.95%) / +20% -> 8일(0.19%) / +30% -> 4일(0.10%)
+BUY_RANGE_MISS_RATE = {0.05: 16.35, 0.10: 3.95, 0.15: 1.09, 0.20: 0.19, 0.30: 0.10}
+
+# 손절 매도에 MOC가 없을 때 LOC로 대신할 여유폭 (아래로)
+LOC_FALLBACK_BUFFER = 0.30
 
 # 매도가 있는 날 매수를 허용하는 방식들. 손절로 청산된 자리는 목표 미달이니
 # 다시 진입한다는 발상이다. 수익률은 오르지만 낙폭도 깊어진다.
@@ -196,12 +211,21 @@ def order_plan(lots: list, cash: float, base_assets: float, cfg: dict, today: st
     """
     today = today or _today_str()
     stop_days = int(cfg["stop_days"])
+    last_close = cfg.get("_last_close", 0.0)
+    has_moc = cfg.get("moc_available", True)
 
     forced, pending = [], []
     for lot in lots:
         held = business_days_between(lot["buy_date"], today)
         row = {**lot, "보유영업일": held}
         if held >= stop_days:
+            # MOC가 없는 증권사면 '아주 낮은 지정가 LOC 매도'로 대신한다.
+            # LOC 매도는 종가 >= 지정가일 때 체결되므로 지정가를 낮추면 사실상 무조건 체결.
+            # 체결가는 지정가가 아니라 종가라서 싸게 팔리는 게 아니다.
+            row["대체지정가"] = (
+                round(last_close * (1 - LOC_FALLBACK_BUFFER), 2)
+                if (not has_moc and last_close) else None
+            )
             forced.append(row)
         elif held >= 1:
             pending.append(row)   # 종가가 목표가 이상이면 팔린다
@@ -218,15 +242,24 @@ def order_plan(lots: list, cash: float, base_assets: float, cfg: dict, today: st
     elif budget <= 0:
         buy["reason"] = "예수금이 없습니다"
     else:
+        # 매수는 언제나 LOC다 (원본 시트 방식). 지정가를 무엇으로 잡느냐만 다르다.
         if pending:
+            # 팔 물량이 있는 날: 최저 목표가 - 0.01.
+            # 종가가 목표가에 닿으면 매도만, 안 닿으면 매수만 일어난다.
             buy["type"] = "LOC"
             buy["limit"] = round(min(p["target_price"] for p in pending) - 0.01, 2)
-            buy["reason"] = "매도될 수도 있는 날 — 지정가 아래로 마감할 때만 사도록 걸어둡니다"
+            buy["reason"] = "팔 물량이 있는 날 — 매도와 매수 중 하나만 일어나게 겁니다"
         else:
-            buy["type"] = "MOC"
-            buy["reason"] = "오늘 팔 게 없으니 종가에 그냥 삽니다"
+            # 팔 물량이 없는 날: '매수 범위'를 씌운다.
+            # 전날 종가보다 이 비율까지 올라도 사겠다는 뜻. 그보다 더 급등하면 안 산다.
+            rng = cfg.get("buy_range_pct", 0.10)
+            buy["type"] = "LOC_RANGE"
+            buy["limit"] = round(last_close * (1 + rng), 2) if last_close else None
+            buy["reason"] = f"팔 물량이 없는 날 — 매수 범위 +{rng*100:.0f}%까지 허용"
 
-        px = buy["limit"] if buy["type"] == "LOC" else cfg.get("_last_close", 0.0)
+        # 수량은 예산을 넘지 않도록 계산한다.
+        # 매수 범위 지정가는 현실적인 체결가가 아니므로(실제 체결은 종가) 마지막 종가로 잡는다.
+        px = buy["limit"] if buy["type"] == "LOC" else last_close
         if px and px > 0:
             qty = budget * (1 - fee) / px
             if cfg.get("whole_shares", True):
