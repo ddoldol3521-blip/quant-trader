@@ -27,51 +27,60 @@ st.set_page_config(page_title="종사종팔 V5", page_icon="🔁", layout="wide"
 st.markdown(
     """
 <style>
-  /* 바깥은 어둡게, 읽는 안쪽만 밝게 — 검은 책상 위에 흰 종이 */
-  .stApp, [data-testid="stAppViewContainer"] {background: #0F1218;}
-  [data-testid="stHeader"] {background: #0F1218;}
-  [data-testid="stToolbar"] {color: #9AA4B2;}
+  /* 화면은 꽉 채운다. 구분은 '검은 선'으로 하고 여백을 어둡게 만들지 않는다. */
+  .block-container {padding: 0.6rem 1.1rem 1.2rem 1.1rem; max-width: 100%;}
 
-  .block-container {
-      background: #FFFFFF;
-      max-width: 1560px;
-      padding: 1.1rem 1.4rem 1.6rem 1.4rem;
-      margin: 0.6rem auto 1.2rem auto;
-      border-radius: 14px;
-      box-shadow: 0 6px 24px rgba(0,0,0,0.35);
-  }
-
-  /* 숫자 카드 — 흰 카드에 옅은 테두리 */
+  /* 숫자 카드 — 흰 바탕에 검은 테두리로 칸을 나눈다 */
   [data-testid="stMetric"] {
       background: #FFFFFF;
-      border: 1px solid #E3E7EF;
-      border-radius: 10px; padding: 10px 14px;
-      box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+      border: 1.5px solid #14181F;
+      border-radius: 6px; padding: 10px 14px;
   }
-  [data-testid="stMetricLabel"] p {font-size: 0.78rem; color: #667085;}
-  [data-testid="stMetricValue"] {font-size: 1.4rem; font-weight: 600;}
+  [data-testid="stMetricLabel"] p {font-size: 0.8rem; color: #3C4557; font-weight: 500;}
+  [data-testid="stMetricValue"] {font-size: 1.45rem; font-weight: 700; color: #0B0E13;}
 
-  [data-testid="stVerticalBlock"] {gap: 0.55rem;}
-  [data-testid="stHorizontalBlock"] {gap: 0.6rem;}
-  hr {margin: 0.5rem 0 !important;}
-  h1 {font-size: 1.55rem; margin-bottom: 0.1rem;}
-  h2 {font-size: 1.2rem; margin: 0.5rem 0 0.3rem 0;}
-  h3 {font-size: 1.02rem; margin: 0.4rem 0 0.2rem 0;}
+  [data-testid="stVerticalBlock"] {gap: 0.5rem;}
+  [data-testid="stHorizontalBlock"] {gap: 0.55rem;}
 
-  /* 탭 — 선택된 탭이 확실히 보이게 */
-  .stTabs [data-baseweb="tab-list"] {gap: 2px; border-bottom: 1px solid #E3E7EF;}
+  /* 섹션을 가르는 검은 선 */
+  hr {margin: 0.6rem 0 !important; border-color: #14181F !important; opacity: 1;}
+  h1 {font-size: 1.5rem; margin-bottom: 0.1rem;}
+  h2 {font-size: 1.15rem; margin: 0.5rem 0 0.3rem 0;}
+  h3 {
+      font-size: 1.02rem; margin: 0.6rem 0 0.3rem 0;
+      padding-bottom: 4px; border-bottom: 2px solid #14181F;
+  }
+
+  /* 탭 — 상단에 크고 뚜렷하게 */
+  .stTabs [data-baseweb="tab-list"] {
+      gap: 4px; border-bottom: 2.5px solid #14181F; margin-bottom: 0.5rem;
+  }
   .stTabs [data-baseweb="tab"] {
-      padding: 8px 16px; border-radius: 8px 8px 0 0; font-weight: 500;
+      padding: 12px 24px; border-radius: 8px 8px 0 0;
+      font-size: 1.02rem; font-weight: 600; color: #5A6474;
+      border: 1.5px solid transparent; border-bottom: none;
   }
-  .stTabs [aria-selected="true"] {background: #EEF2FF;}
+  .stTabs [aria-selected="true"] {
+      background: #14181F; color: #FFFFFF !important;
+      border-color: #14181F;
+  }
+  .stTabs [aria-selected="true"] p {color: #FFFFFF !important; font-weight: 700;}
+  /* 백테스트 안쪽 하위 탭은 한 단계 작게 */
+  .stTabs .stTabs [data-baseweb="tab"] {padding: 7px 16px; font-size: 0.92rem;}
 
-  /* 표 */
-  .stDataFrame {border-radius: 8px; border: 1px solid #E3E7EF;}
-  div[data-testid="stExpander"] {border-radius: 10px; border-color: #E3E7EF;}
-  [data-testid="stCaptionContainer"] p {margin-bottom: 0.15rem; color: #667085;}
+  /* 표 — 검은 테두리로 칸을 확실히 */
+  .stDataFrame {border-radius: 6px; border: 1.5px solid #14181F;}
+  div[data-testid="stExpander"] {border-radius: 6px; border: 1.5px solid #14181F;}
+  [data-testid="stCaptionContainer"] p {margin-bottom: 0.15rem; color: #5A6474;}
 
-  /* 알림 박스 여백 축소 */
-  [data-testid="stAlert"] {padding: 0.6rem 0.9rem;}
+  /* 알림 박스 — 왼쪽에 검은 굵은 선 */
+  [data-testid="stAlert"] {
+      padding: 0.6rem 0.9rem; border-radius: 6px;
+      border-left: 5px solid #14181F;
+  }
+
+  /* 입력칸 테두리도 또렷하게 */
+  [data-baseweb="input"], [data-baseweb="select"] > div {border-color: #3C4557 !important;}
 </style>
 """,
     unsafe_allow_html=True,
@@ -297,7 +306,6 @@ def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole,
     return res, hist, bh
 
 
-# ============================================================ 설정 (맨 위)
 st.markdown("# 🔁 종사종팔 V5")
 if is_shared_server():
     st.caption(
@@ -306,243 +314,254 @@ if is_shared_server():
         "이 설정 그대로 뜹니다 (주소창을 보면 설정값이 붙어 있습니다)."
     )
 
-r1c1, r1c2, r1c3, r1c4 = st.columns([1, 1.1, 1, 1.2])
-with r1c1:
-    ticker = st.text_input("종목", value=cfg.get("ticker", "SOXL")).strip().upper()
-with r1c2:
-    seed = st.number_input("시드 ($)", 100.0, value=float(cfg.get("initial_cash", 10000.0)), step=1000.0)
-with r1c3:
-    splits = st.number_input(
-        "분할수", 2, 60, int(round(1 / cfg.get("daily_buy_pct", 0.10))),
-        help="하루에 총자산의 1/분할수 만큼 산다. 10분할 = 10%. 추천은 10분할.",
-    )
-with r1c4:
-    # 상한을 넉넉히 잡아 막지 않는다. 기간이 너무 짧으면 아래 계산에서
-    # 며칠 이전으로 잡아야 하는지 알려준다 (무조건 막으면 왜 안 되는지 알 수 없다).
-    _lo, _hi = date(2010, 3, 11), date.today()
-    _saved = pd.Timestamp(cfg.get("start_date") or "2025-01-02").date()
-    start_d = st.date_input("시작일", value=min(max(_saved, _lo), _hi), min_value=_lo, max_value=_hi)
-
-r2c1, r2c2, r2c3, r2c4 = st.columns([1, 1, 1, 1.2])
-with r2c1:
-    tgt_pct = st.number_input("목표수익률 (%)", 0.5, 20.0, cfg.get("target_return", 0.0275) * 100, 0.05)
-with r2c2:
-    stop_days = st.number_input("청산 영업일", 2, 60, int(cfg.get("stop_days", 10)))
-with r2c3:
-    fee_pct = st.number_input("수수료 (%)", 0.0, 1.0, cfg.get("fee_rate", 0.0) * 100, 0.001, format="%.4f")
-with r2c4:
-    reinvest = st.radio(
-        "수익 재투자", [True, False],
-        index=0 if cfg.get("reinvest", True) else 1,
-        format_func=lambda v: "⭕ 함 (복리)" if v else "❌ 안 함 (고정)",
-        horizontal=True,
-    )
-
-daily_pct = 1 / splits
-rec = "  ✅ **추천 설정**" if splits == 10 and abs(tgt_pct - 2.75) < 0.01 and stop_days == 10 else ""
-st.caption(
-    f"하루 매수금 = {'어제 총자산' if reinvest else '넣은 돈'}의 **{daily_pct*100:.1f}%** "
-    f"({splits}분할) · 목표 **+{tgt_pct:.2f}%** 도달 시 매도 · **{stop_days}영업일** 지나면 무조건 매도{rec}"
-)
-
-# ---------- 중간 입출금 ----------
-_flows = st.session_state.flows
-with st.expander(
-    f"💰 중간에 돈 넣고 뺀 기록 ({len(_flows)}건)" if _flows else "💰 중간에 돈 넣고 뺀 기록 — 없으면 안 열어도 됩니다",
-    expanded=bool(_flows),
-):
-    st.caption(
-        "투자 도중에 돈을 더 넣거나 뺐다면 여기에 적으세요. **매매 기록은 여전히 필요 없습니다.** "
-        "맨 아래 빈 줄에 입력하면 자동으로 한 줄이 늘어나고, 줄 왼쪽을 선택하고 Delete를 누르면 지워집니다."
-    )
-    _edit_df = pd.DataFrame(
-        [{"날짜": f["날짜"], "구분": "입금" if f["금액"] >= 0 else "출금", "금액($)": abs(f["금액"])}
-         for f in _flows]
-        or [{"날짜": None, "구분": "입금", "금액($)": None}]
-    )
-    edited = st.data_editor(
-        _edit_df, width="stretch", hide_index=True, num_rows="dynamic", key="flow_editor",
-        column_config={
-            "날짜": st.column_config.DateColumn(format="YYYY-MM-DD", width="medium"),
-            "구분": st.column_config.SelectboxColumn(options=["입금", "출금"], width="small"),
-            "금액($)": st.column_config.NumberColumn(min_value=0.0, step=100.0, format="%.0f"),
-        },
-    )
-
-    new_flows = []
-    for _, row in edited.iterrows():
-        if pd.isna(row["날짜"]) or pd.isna(row["금액($)"]) or float(row["금액($)"]) <= 0:
-            continue
-        amt = float(row["금액($)"])
-        new_flows.append({
-            "날짜": pd.Timestamp(row["날짜"]).date(),
-            "금액": -amt if row["구분"] == "출금" else amt,
-        })
-    new_flows.sort(key=lambda f: f["날짜"])
-    if new_flows != _flows:
-        st.session_state.flows = new_flows
-        st.rerun()
-
-    if _flows:
-        _in = sum(f["금액"] for f in _flows if f["금액"] > 0)
-        _out = -sum(f["금액"] for f in _flows if f["금액"] < 0)
-        # 스트림릿 마크다운은 $...$ 를 수식으로 읽어서 글자가 깨진다. 달러 기호를 escape.
-        st.caption(f"입금 합계 **\\${_in:,.0f}** · 출금 합계 **\\${_out:,.0f}**")
-
-# 설정이 바뀌면 조용히 저장해둔다 (다음에 열 때 그대로 뜨도록)
-new_cfg = {
-    "ticker": ticker, "initial_cash": float(seed), "daily_buy_pct": daily_pct,
-    "target_return": tgt_pct / 100, "stop_days": int(stop_days), "fee_rate": fee_pct / 100,
-    "reinvest": bool(reinvest), "start_date": start_d.isoformat(),
-}
-if any(cfg.get(k) != v for k, v in new_cfg.items()):
-    cfg.update(new_cfg)
-    save_config(cfg)   # 내 PC에서 켰을 때만 저장된다 (공용 서버에서는 무시)
-cfg_to_url(cfg, st.session_state.flows)  # 즐겨찾기하면 이 설정으로 다시 열린다
-
-# ============================================================ 계산
-flow_tuples = tuple((str(f["날짜"]), float(f["금액"])) for f in st.session_state.flows)
-try:
-    with st.spinner("계산 중..."):
-        res, hist, bh_curve = simulate(
-            ticker, start_d.isoformat(), date.today().isoformat(),
-            float(seed), daily_pct, tgt_pct / 100, int(stop_days),
-            fee_pct / 100, cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
-            cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
-        )
-except Exception as e:
-    # 시작일이 너무 최근이라 돌릴 게 없는 것인지, 종목 자체가 잘못된 것인지 가른다.
-    # 최근 시세가 받아지면 종목은 멀쩡한 것이므로 '이제 막 시작' 상태로 본다.
-    try:
-        recent = load_price_history(
-            ticker, (date.today() - timedelta(days=40)).isoformat(), date.today().isoformat()
-        )
-    except Exception:
-        recent = None
-
-    if recent is None or recent.empty:
-        st.error(
-            f"**{ticker} 시세를 못 받았습니다.** 종목코드를 확인해주세요. "
-            f"(미국 종목은 티커, 한국 종목은 6자리 숫자)\n\n원인: {e}"
-        )
-        st.stop()
-
-    # ---------- 오늘부터 시작하는 경우 ----------
-    # 지나간 날이 없으니 백테스트는 못 하지만, '오늘 얼마 사면 되는지'는 알려줄 수 있다.
-    px = float(recent["Close"].iloc[-1])
-    px_date = recent.index[-1].date()
-    st.info(
-        f"**{start_d}부터 시작하시는군요.** 아직 지나간 날이 없어서 성적표는 없습니다. "
-        "대신 **오늘 넣을 첫 주문**을 아래에 정리했습니다."
-    )
-
-    # 주문에 필요한 값은 전부 규칙으로 정해진다. 입력받을 게 없다.
-    #   지정가 = 어제 종가 x (1 + 매수 범위)
-    #   수량   = 예산 / 어제 종가
-    # 목표가만 '실제 체결가'가 있어야 나오는데, 체결가는 오늘 종가라 지금은 모른다.
-    # 그래서 목표가 계산은 주문 안내 아래로 따로 뺐다.
-    _rng = cfg.get("buy_range_pct", 0.10)
-    _limit = round(px * (1 + _rng), 2)
-    first_budget = seed * daily_pct
-    first_qty = int(first_budget * (1 - fee_pct / 100) / px) if cfg.get("whole_shares", True) \
-        else first_budget * (1 - fee_pct / 100) / px
-    first_cost = first_qty * px * (1 + fee_pct / 100)
-
-    f1, f2, f3, f4 = st.columns(4)
-    f1.metric("시드", f"${seed:,.0f}")
-    f2.metric("오늘 살 금액", f"${first_cost:,.2f}", f"시드의 {daily_pct*100:.1f}%")
-    f3.metric("수량", f"{first_qty:,.0f}주")
-    f4.metric("LOC 지정가", f"${_limit:,.2f}", f"어제 종가 +{_rng*100:.0f}%")
-
-    st.markdown("### 📋 오늘 넣을 주문")
-    st.success(
-        f"### {ticker} **{first_qty:,.0f}주** 매수 — **LOC 지정가 \\${_limit:,.2f}**\n\n"
-        f"약 **\\${first_cost:,.2f}** 어치입니다. "
-        f"지정가 = 어제 종가 \\${px:,.2f} × (1 + **매수 범위 {_rng*100:.0f}%**)"
-    )
-    st.caption(
-        f"**처음이라 팔 물량이 없으니** 매수 범위를 씌워서 겁니다. "
-        f"어제 종가보다 {_rng*100:.0f}% 넘게 오르면 안 사고 넘어갑니다. "
-        f"그 안에서 마감하면 **종가에** 체결됩니다 (지정가에 사는 게 아닙니다). "
-        f"매수 범위는 **규칙·설정 탭**에서 바꿀 수 있습니다."
-    )
-    st.caption(
-        f"**⏰ 주문 마감**: 미 동부 15:50 (한국시간 새벽 4:50, 서머타임 해제 시 5:50)까지. "
-        f"저녁에 미리 걸어두면 됩니다. · 수량은 예산을 넘지 않게 내림했습니다."
-    )
-
-    st.info(
-        f"**오늘은 이 주문 하나만 넣으면 끝입니다.** 목표가는 지금 몰라도 됩니다.\n\n"
-        f"목표가는 실제 체결가(= 오늘 종가)의 +{tgt_pct:.2f}% 인데, 오늘 산 물량은 "
-        f"**내일부터** 매도 대상이라 오늘 밤 걸 매도 주문이 없습니다.\n\n"
-        f"**내일 이 화면을 다시 열면** — 시작일을 오늘({start_d})로 둔 채 — "
-        f"오늘 종가가 반영돼서 걸어야 할 **LOC 매도가**와 다음 매수 주문이 같이 나옵니다. "
-        f"**아무것도 입력하실 필요 없습니다.**"
-    )
-    with st.expander("📖 이 전략 규칙 한눈에 보기", expanded=True):
-        st.markdown(RULES_MD.format(
-            tgt=f"{tgt_pct:.2f}", stop=int(stop_days), splits=int(splits),
-            pct=f"{daily_pct*100:.1f}", ticker=ticker,
-            rng=f"{cfg.get('buy_range_pct', 0.10)*100:.0f}",
-        ))
-    st.stop()
-
-for _note in res.flow_notes:
-    st.warning(f"입출금 안내 — {_note}")
-
-log = res.daily_log
-last = log.iloc[-1]
-price = float(last["종가"])
-price_date = pd.Timestamp(last["날짜"]).date()
-shares = float(last["보유수량"])
-cash = float(last["예수금"])
-equity = float(last["평가금"])
-total = float(last["총자산"])
-
-# ============================================================ 현황
-# 입출금이 있으면 '총자산/시드'는 수익률이 아니다. 넣은 돈 기준으로 계산한다.
-put_in = res.total_contributed
-profit = res.net_profit
-has_flows = bool(st.session_state.flows)
-
-k = st.columns(7 if has_flows else 6)
-i = 0
-k[i].metric("총자산", f"${total:,.0f}"); i += 1
-if has_flows:
-    k[i].metric("넣은 돈", f"${put_in:,.0f}", f"시드 ${seed:,.0f}"); i += 1
-k[i].metric("누적 손익금", f"${profit:+,.0f}"); i += 1
-k[i].metric("누적 수익률", f"{res.net_return_pct:+.2f}%"); i += 1
-k[i].metric("남은 현금", f"${cash:,.0f}", f"{cash/total*100:.0f}%" if total else None); i += 1
-k[i].metric(
-    f"{ticker} 현재가", f"${price:,.2f}",
-    f"{(price/log.iloc[-2]['종가']-1)*100:+.2f}%" if len(log) > 1 else None,
-); i += 1
-k[i].metric("현재 보유", f"{shares:,.0f}주", f"${equity:,.0f} · {int(last['보유건수'])}건")
-
-# 기간이 짧으면 연 환산이 의미가 없어 엔진이 CAGR을 안 준다
-short_period = pd.isna(res.cagr_pct)
-cagr_txt = "연평균 —" if short_period else f"연평균 {res.cagr_pct:.1f}%"
-st.caption(
-    f"**{start_d} → {price_date}** 기준 · 거래일 {len(log)}일 · "
-    f"매매 {res.num_trades}회 (익절 {res.num_target_sells} / 손절 {res.num_forced_sells}) · "
-    f"승률 {res.win_rate_pct:.1f}% · **{cagr_txt} · 최대낙폭 {res.mdd_pct:.1f}%**"
-    + ("  (연평균·최대낙폭은 입출금 효과를 뺀 전략 자체의 성적입니다)" if has_flows else "")
-)
-if short_period:
-    st.info(
-        f"**아직 {len(log)}거래일밖에 안 됐습니다.** 총자산·손익은 정확하지만, "
-        f"연평균 수익률은 기간이 짧으면 뻥튀기돼서 표시하지 않습니다 "
-        f"(약 3개월 지나면 나옵니다). 지금은 **오늘 할 일**만 보시면 됩니다."
-        + (f" 청산 {stop_days}영업일이 아직 한 번도 안 지나 손절 기록이 없을 수 있습니다."
-           if len(log) <= int(stop_days) else "")
-    )
-
 tab_home, tab_grid, tab_year, tab_help = st.tabs(
     ["📅 오늘 할 일 (주문 시트)", "📋 일별 기록", "📊 백테스트", "📖 규칙 · 설정"]
 )
 
 # ============================================================ 오늘 할 일
+# 설정과 현황 카드도 이 탭 안에서 그린다. 아래 탭들은 여기서 만든
+# 결과 변수(res/hist/bh_curve...)를 그대로 쓴다 — 설정이 한 곳뿐이라
+# 탭마다 따로 맞출 필요가 없다.
+ready = True
 with tab_home:
+    # ============================================================ 설정 (맨 위)
+
+
+    r1c1, r1c2, r1c3, r1c4 = st.columns([1, 1.1, 1, 1.2])
+    with r1c1:
+        ticker = st.text_input("종목", value=cfg.get("ticker", "SOXL")).strip().upper()
+    with r1c2:
+        seed = st.number_input("시드 ($)", 100.0, value=float(cfg.get("initial_cash", 10000.0)), step=1000.0)
+    with r1c3:
+        splits = st.number_input(
+            "분할수", 2, 60, int(round(1 / cfg.get("daily_buy_pct", 0.10))),
+            help="하루에 총자산의 1/분할수 만큼 산다. 10분할 = 10%. 추천은 10분할.",
+        )
+    with r1c4:
+        # 상한을 넉넉히 잡아 막지 않는다. 기간이 너무 짧으면 아래 계산에서
+        # 며칠 이전으로 잡아야 하는지 알려준다 (무조건 막으면 왜 안 되는지 알 수 없다).
+        _lo, _hi = date(2010, 3, 11), date.today()
+        _saved = pd.Timestamp(cfg.get("start_date") or "2025-01-02").date()
+        start_d = st.date_input("시작일", value=min(max(_saved, _lo), _hi), min_value=_lo, max_value=_hi)
+
+    r2c1, r2c2, r2c3, r2c4 = st.columns([1, 1, 1, 1.2])
+    with r2c1:
+        tgt_pct = st.number_input("목표수익률 (%)", 0.5, 20.0, cfg.get("target_return", 0.0275) * 100, 0.05)
+    with r2c2:
+        stop_days = st.number_input("청산 영업일", 2, 60, int(cfg.get("stop_days", 10)))
+    with r2c3:
+        fee_pct = st.number_input("수수료 (%)", 0.0, 1.0, cfg.get("fee_rate", 0.0) * 100, 0.001, format="%.4f")
+    with r2c4:
+        reinvest = st.radio(
+            "수익 재투자", [True, False],
+            index=0 if cfg.get("reinvest", True) else 1,
+            format_func=lambda v: "⭕ 함 (복리)" if v else "❌ 안 함 (고정)",
+            horizontal=True,
+        )
+
+    daily_pct = 1 / splits
+    rec = "  ✅ **추천 설정**" if splits == 10 and abs(tgt_pct - 2.75) < 0.01 and stop_days == 10 else ""
+    st.caption(
+        f"하루 매수금 = {'어제 총자산' if reinvest else '넣은 돈'}의 **{daily_pct*100:.1f}%** "
+        f"({splits}분할) · 목표 **+{tgt_pct:.2f}%** 도달 시 매도 · **{stop_days}영업일** 지나면 무조건 매도{rec}"
+    )
+
+    # ---------- 중간 입출금 ----------
+    _flows = st.session_state.flows
+    with st.expander(
+        f"💰 중간에 돈 넣고 뺀 기록 ({len(_flows)}건)" if _flows else "💰 중간에 돈 넣고 뺀 기록 — 없으면 안 열어도 됩니다",
+        expanded=bool(_flows),
+    ):
+        st.caption(
+            "투자 도중에 돈을 더 넣거나 뺐다면 여기에 적으세요. **매매 기록은 여전히 필요 없습니다.** "
+            "맨 아래 빈 줄에 입력하면 자동으로 한 줄이 늘어나고, 줄 왼쪽을 선택하고 Delete를 누르면 지워집니다."
+        )
+        _edit_df = pd.DataFrame(
+            [{"날짜": f["날짜"], "구분": "입금" if f["금액"] >= 0 else "출금", "금액($)": abs(f["금액"])}
+             for f in _flows]
+            or [{"날짜": None, "구분": "입금", "금액($)": None}]
+        )
+        edited = st.data_editor(
+            _edit_df, width="stretch", hide_index=True, num_rows="dynamic", key="flow_editor",
+            column_config={
+                "날짜": st.column_config.DateColumn(format="YYYY-MM-DD", width="medium"),
+                "구분": st.column_config.SelectboxColumn(options=["입금", "출금"], width="small"),
+                "금액($)": st.column_config.NumberColumn(min_value=0.0, step=100.0, format="%.0f"),
+            },
+        )
+
+        new_flows = []
+        for _, row in edited.iterrows():
+            if pd.isna(row["날짜"]) or pd.isna(row["금액($)"]) or float(row["금액($)"]) <= 0:
+                continue
+            amt = float(row["금액($)"])
+            new_flows.append({
+                "날짜": pd.Timestamp(row["날짜"]).date(),
+                "금액": -amt if row["구분"] == "출금" else amt,
+            })
+        new_flows.sort(key=lambda f: f["날짜"])
+        if new_flows != _flows:
+            st.session_state.flows = new_flows
+            st.rerun()
+
+        if _flows:
+            _in = sum(f["금액"] for f in _flows if f["금액"] > 0)
+            _out = -sum(f["금액"] for f in _flows if f["금액"] < 0)
+            # 스트림릿 마크다운은 $...$ 를 수식으로 읽어서 글자가 깨진다. 달러 기호를 escape.
+            st.caption(f"입금 합계 **\\${_in:,.0f}** · 출금 합계 **\\${_out:,.0f}**")
+
+    # 설정이 바뀌면 조용히 저장해둔다 (다음에 열 때 그대로 뜨도록)
+    new_cfg = {
+        "ticker": ticker, "initial_cash": float(seed), "daily_buy_pct": daily_pct,
+        "target_return": tgt_pct / 100, "stop_days": int(stop_days), "fee_rate": fee_pct / 100,
+        "reinvest": bool(reinvest), "start_date": start_d.isoformat(),
+    }
+    if any(cfg.get(k) != v for k, v in new_cfg.items()):
+        cfg.update(new_cfg)
+        save_config(cfg)   # 내 PC에서 켰을 때만 저장된다 (공용 서버에서는 무시)
+    cfg_to_url(cfg, st.session_state.flows)  # 즐겨찾기하면 이 설정으로 다시 열린다
+
+    # ============================================================ 계산
+    flow_tuples = tuple((str(f["날짜"]), float(f["금액"])) for f in st.session_state.flows)
+    recent = None   # 계산이 안 될 때만 쓰는 최근 시세
+    try:
+        with st.spinner("계산 중..."):
+            res, hist, bh_curve = simulate(
+                ticker, start_d.isoformat(), date.today().isoformat(),
+                float(seed), daily_pct, tgt_pct / 100, int(stop_days),
+                fee_pct / 100, cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
+                cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
+            )
+    except Exception as e:
+        # 시작일이 너무 최근이라 돌릴 게 없는 것인지, 종목 자체가 잘못된 것인지 가른다.
+        # 최근 시세가 받아지면 종목은 멀쩡한 것이므로 '이제 막 시작' 상태로 본다.
+        try:
+            recent = load_price_history(
+                ticker, (date.today() - timedelta(days=40)).isoformat(), date.today().isoformat()
+            )
+        except Exception:
+            recent = None
+
+        ready = False   # 아래 탭들이 쓸 계산 결과가 없다는 뜻
+
+        if recent is None or recent.empty:
+            st.error(
+                f"**{ticker} 시세를 못 받았습니다.** 종목코드를 확인해주세요. "
+                f"(미국 종목은 티커, 한국 종목은 6자리 숫자)\n\n원인: {e}"
+            )
+            recent = None
+
+    # ---------- 오늘부터 시작하는 경우 ----------
+    # 지나간 날이 없으니 백테스트는 못 하지만, '오늘 얼마 사면 되는지'는 알려줄 수 있다.
+    if not ready and recent is not None:
+        px = float(recent["Close"].iloc[-1])
+        px_date = recent.index[-1].date()
+        st.info(
+            f"**{start_d}부터 시작하시는군요.** 아직 지나간 날이 없어서 성적표는 없습니다. "
+            "대신 **오늘 넣을 첫 주문**을 아래에 정리했습니다."
+        )
+
+        # 주문에 필요한 값은 전부 규칙으로 정해진다. 입력받을 게 없다.
+        #   지정가 = 어제 종가 x (1 + 매수 범위)
+        #   수량   = 예산 / 어제 종가
+        # 목표가만 '실제 체결가'가 있어야 나오는데, 체결가는 오늘 종가라 지금은 모른다.
+        # 그래서 목표가 계산은 주문 안내 아래로 따로 뺐다.
+        _rng = cfg.get("buy_range_pct", 0.10)
+        _limit = round(px * (1 + _rng), 2)
+        first_budget = seed * daily_pct
+        first_qty = int(first_budget * (1 - fee_pct / 100) / px) if cfg.get("whole_shares", True) \
+            else first_budget * (1 - fee_pct / 100) / px
+        first_cost = first_qty * px * (1 + fee_pct / 100)
+
+        f1, f2, f3, f4 = st.columns(4)
+        f1.metric("시드", f"${seed:,.0f}")
+        f2.metric("오늘 살 금액", f"${first_cost:,.2f}", f"시드의 {daily_pct*100:.1f}%")
+        f3.metric("수량", f"{first_qty:,.0f}주")
+        f4.metric("LOC 지정가", f"${_limit:,.2f}", f"어제 종가 +{_rng*100:.0f}%")
+
+        st.markdown("### 📋 오늘 넣을 주문")
+        st.success(
+            f"### {ticker} **{first_qty:,.0f}주** 매수 — **LOC 지정가 \\${_limit:,.2f}**\n\n"
+            f"약 **\\${first_cost:,.2f}** 어치입니다. "
+            f"지정가 = 어제 종가 \\${px:,.2f} × (1 + **매수 범위 {_rng*100:.0f}%**)"
+        )
+        st.caption(
+            f"**처음이라 팔 물량이 없으니** 매수 범위를 씌워서 겁니다. "
+            f"어제 종가보다 {_rng*100:.0f}% 넘게 오르면 안 사고 넘어갑니다. "
+            f"그 안에서 마감하면 **종가에** 체결됩니다 (지정가에 사는 게 아닙니다). "
+            f"매수 범위는 **규칙·설정 탭**에서 바꿀 수 있습니다."
+        )
+        st.caption(
+            f"**⏰ 주문 마감**: 미 동부 15:50 (한국시간 새벽 4:50, 서머타임 해제 시 5:50)까지. "
+            f"저녁에 미리 걸어두면 됩니다. · 수량은 예산을 넘지 않게 내림했습니다."
+        )
+
+        st.info(
+            f"**오늘은 이 주문 하나만 넣으면 끝입니다.** 목표가는 지금 몰라도 됩니다.\n\n"
+            f"목표가는 실제 체결가(= 오늘 종가)의 +{tgt_pct:.2f}% 인데, 오늘 산 물량은 "
+            f"**내일부터** 매도 대상이라 오늘 밤 걸 매도 주문이 없습니다.\n\n"
+            f"**내일 이 화면을 다시 열면** — 시작일을 오늘({start_d})로 둔 채 — "
+            f"오늘 종가가 반영돼서 걸어야 할 **LOC 매도가**와 다음 매수 주문이 같이 나옵니다. "
+            f"**아무것도 입력하실 필요 없습니다.**"
+        )
+        with st.expander("📖 이 전략 규칙 한눈에 보기", expanded=True):
+            st.markdown(RULES_MD.format(
+                tgt=f"{tgt_pct:.2f}", stop=int(stop_days), splits=int(splits),
+                pct=f"{daily_pct*100:.1f}", ticker=ticker,
+                rng=f"{cfg.get('buy_range_pct', 0.10)*100:.0f}",
+            ))
+
+if ready:
+  with tab_home:
+    for _note in res.flow_notes:
+        st.warning(f"입출금 안내 — {_note}")
+
+    log = res.daily_log
+    last = log.iloc[-1]
+    price = float(last["종가"])
+    price_date = pd.Timestamp(last["날짜"]).date()
+    shares = float(last["보유수량"])
+    cash = float(last["예수금"])
+    equity = float(last["평가금"])
+    total = float(last["총자산"])
+
+    # ============================================================ 현황
+    # 입출금이 있으면 '총자산/시드'는 수익률이 아니다. 넣은 돈 기준으로 계산한다.
+    put_in = res.total_contributed
+    profit = res.net_profit
+    has_flows = bool(st.session_state.flows)
+
+    k = st.columns(7 if has_flows else 6)
+    i = 0
+    k[i].metric("총자산", f"${total:,.0f}"); i += 1
+    if has_flows:
+        k[i].metric("넣은 돈", f"${put_in:,.0f}", f"시드 ${seed:,.0f}"); i += 1
+    k[i].metric("누적 손익금", f"${profit:+,.0f}"); i += 1
+    k[i].metric("누적 수익률", f"{res.net_return_pct:+.2f}%"); i += 1
+    k[i].metric("남은 현금", f"${cash:,.0f}", f"{cash/total*100:.0f}%" if total else None); i += 1
+    k[i].metric(
+        f"{ticker} 현재가", f"${price:,.2f}",
+        f"{(price/log.iloc[-2]['종가']-1)*100:+.2f}%" if len(log) > 1 else None,
+    ); i += 1
+    k[i].metric("현재 보유", f"{shares:,.0f}주", f"${equity:,.0f} · {int(last['보유건수'])}건")
+
+    # 기간이 짧으면 연 환산이 의미가 없어 엔진이 CAGR을 안 준다
+    short_period = pd.isna(res.cagr_pct)
+    cagr_txt = "연평균 —" if short_period else f"연평균 {res.cagr_pct:.1f}%"
+    st.caption(
+        f"**{start_d} → {price_date}** 기준 · 거래일 {len(log)}일 · "
+        f"매매 {res.num_trades}회 (익절 {res.num_target_sells} / 손절 {res.num_forced_sells}) · "
+        f"승률 {res.win_rate_pct:.1f}% · **{cagr_txt} · 최대낙폭 {res.mdd_pct:.1f}%**"
+        + ("  (연평균·최대낙폭은 입출금 효과를 뺀 전략 자체의 성적입니다)" if has_flows else "")
+    )
+    if short_period:
+        st.info(
+            f"**아직 {len(log)}거래일밖에 안 됐습니다.** 총자산·손익은 정확하지만, "
+            f"연평균 수익률은 기간이 짧으면 뻥튀기돼서 표시하지 않습니다 "
+            f"(약 3개월 지나면 나옵니다). 지금은 **오늘 할 일**만 보시면 됩니다."
+            + (f" 청산 {stop_days}영업일이 아직 한 번도 안 지나 손절 기록이 없을 수 있습니다."
+               if len(log) <= int(stop_days) else "")
+        )
     st.caption(
         f"마지막 반영 종가는 **{price_date}의 \\${price:,.2f}** 입니다. "
         "아래는 **오늘 마감 전에 미리 걸어둘 주문**입니다. 오늘 종가를 몰라도 되게 만들어져 있습니다."
@@ -690,7 +709,17 @@ with tab_home:
     )
 
 # ============================================================ 일별 기록
-with tab_grid:
+# 아래 탭들은 '오늘 할 일' 탭에서 만든 계산 결과를 그대로 쓴다.
+# 설정이 한 곳(오늘 할 일)뿐이라 탭마다 따로 맞출 필요가 없다.
+if not ready:
+    with tab_grid:
+        st.info(
+            "아직 쌓인 기록이 없습니다. **📅 오늘 할 일** 탭에서 시작일을 "
+            "조금 더 앞으로 잡으면 하루하루가 여기에 채워집니다."
+        )
+
+if ready:
+  with tab_grid:
     g1, g2, g3 = st.columns([1, 1, 3])
     with g1:
         only_act = st.checkbox("매매한 날만", value=False)
@@ -923,8 +952,14 @@ with tab_year:
 
     # ---------- 내 설정 그대로 ----------
     with bt2:
+      if not ready:
+        st.info(
+            "**📅 오늘 할 일** 탭의 설정으로는 아직 돌릴 기간이 없습니다. "
+            "시작일을 조금 더 앞으로 잡아보세요. (왼쪽 '조건 바꿔서 돌려보기'는 그대로 됩니다)"
+        )
+      else:
         st.caption(
-            f"맨 위에 넣으신 설정 그대로입니다 — **{ticker}** · 시작 {start_d} · 시드 \\${seed:,.0f} · "
+            f"**📅 오늘 할 일** 탭의 설정 그대로입니다 — **{ticker}** · 시작 {start_d} · 시드 \\${seed:,.0f} · "
             f"{splits}분할 · 목표 {tgt_pct:.2f}% · 청산 {stop_days}영업일 · "
             f"{'복리' if reinvest else '재투자 안 함'}"
         )

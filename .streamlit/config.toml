@@ -2,10 +2,10 @@
 gatherUsageStats = false
 
 [theme]
-# 바깥은 어둡게, 글을 읽는 안쪽은 밝게 (검은 책상 위의 흰 종이).
-# 글씨가 어두워야 하니 base는 light로 두고, 바깥 배경만 CSS로 어둡게 칠한다.
+# 흰 바탕에 검은 글씨. 화면을 어둡게 덮지 않고, 칸과 칸 사이를
+# 검은 선으로 갈라서 구분한다 (테두리·구분선은 jongsa_app.py의 CSS).
 base = "light"
 backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F2F4F8"
-textColor = "#1B2230"
-primaryColor = "#2563EB"
+secondaryBackgroundColor = "#F4F5F8"
+textColor = "#14181F"
+primaryColor = "#14181F"
