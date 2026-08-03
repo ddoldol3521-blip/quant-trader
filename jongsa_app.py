@@ -275,14 +275,10 @@ try:
             cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
         )
 except Exception as e:
-    if "데이터가 너무 짧습니다" in str(e):
-        # 10영업일 청산 규칙을 한 번은 돌려봐야 결과가 나온다
-        need_days = int((int(stop_days) + 2) * 1.5) + 4
+    if "거래일이 2일 미만" in str(e):
         st.error(
-            f"**기간이 너무 짧습니다.** 청산 규칙이 {stop_days}영업일이라 최소 그만큼은 지나야 "
-            f"결과가 나옵니다.\n\n"
-            f"시작일을 **{(date.today() - timedelta(days=need_days)).isoformat()}** 이전으로 잡아보세요. "
-            f"(청산 영업일을 줄이면 더 최근 날짜도 됩니다)"
+            "**시작일이 너무 최근입니다.** 장이 열린 날이 이틀은 있어야 계산이 됩니다.\n\n"
+            "며칠 앞으로 당겨보세요. (주말·공휴일은 장이 안 열립니다)"
         )
     else:
         st.error(f"계산 실패: {e}  — 종목코드와 시작일을 확인하세요.")
@@ -320,12 +316,23 @@ k[i].metric(
 ); i += 1
 k[i].metric("현재 보유", f"{shares:,.0f}주", f"${equity:,.0f} · {int(last['보유건수'])}건")
 
+# 기간이 짧으면 연 환산이 의미가 없어 엔진이 CAGR을 안 준다
+short_period = pd.isna(res.cagr_pct)
+cagr_txt = "연평균 —" if short_period else f"연평균 {res.cagr_pct:.1f}%"
 st.caption(
-    f"**{start_d} → {price_date}** 기준 · "
+    f"**{start_d} → {price_date}** 기준 · 거래일 {len(log)}일 · "
     f"매매 {res.num_trades}회 (익절 {res.num_target_sells} / 손절 {res.num_forced_sells}) · "
-    f"승률 {res.win_rate_pct:.1f}% · **연평균 {res.cagr_pct:.1f}% · 최대낙폭 {res.mdd_pct:.1f}%**"
+    f"승률 {res.win_rate_pct:.1f}% · **{cagr_txt} · 최대낙폭 {res.mdd_pct:.1f}%**"
     + ("  (연평균·최대낙폭은 입출금 효과를 뺀 전략 자체의 성적입니다)" if has_flows else "")
 )
+if short_period:
+    st.info(
+        f"**아직 {len(log)}거래일밖에 안 됐습니다.** 총자산·손익은 정확하지만, "
+        f"연평균 수익률은 기간이 짧으면 뻥튀기돼서 표시하지 않습니다 "
+        f"(약 3개월 지나면 나옵니다). 지금은 **오늘 할 일**만 보시면 됩니다."
+        + (f" 청산 {stop_days}영업일이 아직 한 번도 안 지나 손절 기록이 없을 수 있습니다."
+           if len(log) <= int(stop_days) else "")
+    )
 
 tab_home, tab_grid, tab_year, tab_help = st.tabs(
     ["📅 오늘 할 일", "📋 일별 기록", "📊 연도별 성과", "📖 규칙 · 설정"]
@@ -585,9 +592,12 @@ with tab_year:
         st.dataframe(ydf, width="stretch", hide_index=True, height=min(430, 60 + 36 * len(ydf)))
     with yc2:
         m = st.columns(3)
-        m[0].metric("CAGR", f"{res.cagr_pct:.2f}%")
+        m[0].metric("CAGR", "—" if short_period else f"{res.cagr_pct:.2f}%")
         m[1].metric("MDD", f"{res.mdd_pct:.2f}%")
-        m[2].metric("효율", f"{res.cagr_pct / -res.mdd_pct:.2f}" if res.mdd_pct else "—")
+        m[2].metric(
+            "효율",
+            "—" if (short_period or not res.mdd_pct) else f"{res.cagr_pct / -res.mdd_pct:.2f}",
+        )
         st.line_chart(
             pd.DataFrame({"이 전략": res.equity_curve, f"존버 ({ticker})": bh_curve}),
             height=330,

@@ -64,10 +64,18 @@ class JongsaResult:
     flow_notes: list = field(default_factory=list)
 
 
+# 이보다 짧은 기간을 연 단위로 환산하면 숫자가 터무니없어진다.
+# (2주 수익률 3%를 연으로 늘리면 100%가 넘는다) 그 경우 CAGR은 내주지 않는다.
+MIN_DAYS_FOR_CAGR = 60
+
+
 def _metrics(equity: pd.Series, initial_cash: float, n_days: int) -> tuple:
     years = n_days / TRADING_DAYS_PER_YEAR
     final = float(equity.iloc[-1])
-    cagr = ((final / initial_cash) ** (1 / years) - 1) * 100 if years > 0 and final > 0 else float("nan")
+    if n_days >= MIN_DAYS_FOR_CAGR and years > 0 and final > 0:
+        cagr = ((final / initial_cash) ** (1 / years) - 1) * 100
+    else:
+        cagr = float("nan")
     running_max = equity.cummax()
     dd = (equity - running_max) / running_max
     return cagr, float(dd.min()) * 100, dd
@@ -139,8 +147,8 @@ def run_jongsa(
     close = df["Close"].astype(float).values
     dates = df.index
     n = len(close)
-    if n < stop_days + 2:
-        raise ValueError("데이터가 너무 짧습니다.")
+    if n < 2:
+        raise ValueError("거래일이 2일 미만입니다. 시작일을 며칠 앞으로 당기세요.")
 
     cash = float(initial_cash)
     shares = 0.0
