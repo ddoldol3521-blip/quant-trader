@@ -1,18 +1,69 @@
-"""한국 주식 시세 데이터 수집 (FinanceDataReader 사용)."""
+"""주식 시세 데이터 수집 (FinanceDataReader 사용, 실패하면 yfinance로 대체)."""
 
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import FinanceDataReader as fdr
 import pandas as pd
+
+# FinanceDataReader는 딸린 패키지가 많아서, 배포 환경에서 그중 하나만 어긋나도
+# import 자체가 터진다. 그때 앱 전체가 죽지 않도록 감싸두고, 시세는 yfinance로
+# 받아온다. (실제로 Streamlit Cloud에서 import 단계 오류로 앱이 멈춘 적이 있다)
+try:
+    import FinanceDataReader as fdr
+
+    FDR_IMPORT_ERROR = None
+except Exception as _e:  # ImportError뿐 아니라 내부 초기화 오류까지 잡는다
+    fdr = None
+    FDR_IMPORT_ERROR = _e
 
 MAX_WORKERS = 10  # 동시에 받아올 종목 수 (너무 크면 차단될 수 있음)
 
 
+def _yf_symbols(code: str) -> list[str]:
+    """yfinance용 심볼 후보. 한국 6자리 코드는 .KS(코스피)/.KQ(코스닥) 둘 다 시도."""
+    if code.isdigit() and len(code) == 6:
+        return [f"{code}.KS", f"{code}.KQ"]
+    return [code]
+
+
+def _yf_ohlcv(code: str, start: str, end: str) -> pd.DataFrame:
+    """yfinance로 일봉을 받아 FinanceDataReader와 같은 모양으로 맞춘다."""
+    from src import ssl_fix
+
+    ssl_fix.apply()  # 한글 경로 인증서 문제 (윈도우 로컬용, 리눅스에선 무해)
+    import yfinance as yf
+
+    last_err = None
+    for sym in _yf_symbols(code):
+        try:
+            df = yf.Ticker(sym).history(start=start, end=end, auto_adjust=False)
+        except Exception as e:
+            last_err = e
+            continue
+        if df is not None and not df.empty:
+            df = df.rename(columns={"Stock Splits": "Splits"})
+            if getattr(df.index, "tz", None) is not None:
+                df.index = df.index.tz_localize(None)
+            df.index.name = "Date"
+            return df[[c for c in ("Open", "High", "Low", "Close", "Volume") if c in df.columns]]
+    if last_err:
+        raise last_err
+    raise ValueError(f"{code} 시세를 받지 못했습니다.")
+
+
 def get_kr_ohlcv(code: str, start: str, end: str) -> pd.DataFrame:
-    """종목 하나의 일봉 OHLCV를 가져온다."""
-    df = fdr.DataReader(code, start, end)
-    return df
+    """종목 하나의 일봉 OHLCV를 가져온다.
+
+    FinanceDataReader를 먼저 쓰고, 못 쓰거나 빈 값이면 yfinance로 넘어간다.
+    """
+    if fdr is not None:
+        try:
+            df = fdr.DataReader(code, start, end)
+            if df is not None and not df.empty:
+                return df
+        except Exception:
+            pass  # 아래 yfinance로 재시도
+    return _yf_ohlcv(code, start, end)
 
 
 def fetch_universe_data(universe: pd.DataFrame, start: str, end: str, show_progress: bool = True) -> dict:
@@ -27,7 +78,7 @@ def fetch_universe_data(universe: pd.DataFrame, start: str, end: str, show_progr
 
     def _fetch(code):
         try:
-            return code, fdr.DataReader(code, start, end)
+            return code, get_kr_ohlcv(code, start, end)
         except Exception:
             return code, None
 

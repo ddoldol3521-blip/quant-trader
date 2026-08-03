@@ -6,3 +6,11 @@ matplotlib==3.11.1
 plotly==6.9.0
 streamlit==1.60.0
 requests==2.34.2
+
+# FinanceDataReader가 딸고 오는 것들. 고정하지 않으면 배포 환경에서 최신 버전이
+# 깔려 import 단계에서 깨질 수 있다 (실제로 겪음). 로컬에서 동작 확인된 버전이다.
+lxml==6.1.1
+beautifulsoup4==4.15.0
+soupsieve==2.9.1
+requests-file==3.0.1
+tqdm==4.70.0
