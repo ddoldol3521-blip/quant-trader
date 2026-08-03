@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from src.data.kr_data import get_kr_ohlcv
-from src.jongsa_backtest import run_jongsa
+from src.jongsa_backtest import run_buy_and_hold, run_jongsa
 from src.jongsa_live import PRESETS, SELL_DAY_MODES
 from src.jongsa_live import business_days_between as bdays
 from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
@@ -66,6 +66,25 @@ _URL_KEYS = {
 }
 
 
+def flows_from_url() -> list:
+    """주소에 담긴 입출금 목록을 읽는다. 형식: c=2025-07-01:5000,2026-01-05:-3000"""
+    raw = st.query_params.get("c", "")
+    out = []
+    for part in raw.split(","):
+        if ":" not in part:
+            continue
+        d, _, amt = part.partition(":")
+        try:
+            out.append({"날짜": pd.Timestamp(d.strip()).date(), "금액": float(amt)})
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+def flows_to_param(flows: list) -> str:
+    return ",".join(f"{f['날짜']}:{f['금액']:.0f}" for f in flows)
+
+
 def cfg_from_url(base: dict) -> dict:
     """주소에 붙은 설정을 읽어 기본 설정 위에 덮어쓴다. 이상한 값은 무시한다."""
     cfg = dict(base)
@@ -88,9 +107,9 @@ def cfg_from_url(base: dict) -> dict:
     return cfg
 
 
-def cfg_to_url(cfg: dict) -> None:
+def cfg_to_url(cfg: dict, flows: list) -> None:
     """현재 설정을 주소에 반영한다. 이 주소를 즐겨찾기하면 설정이 유지된다."""
-    st.query_params.from_dict({
+    params = {
         "t": cfg["ticker"],
         "s": f"{cfg['initial_cash']:.0f}",
         "n": f"{round(1 / cfg['daily_buy_pct'])}",
@@ -100,12 +119,18 @@ def cfg_to_url(cfg: dict) -> None:
         "f": f"{cfg['fee_rate'] * 100:g}",
         "ri": "1" if cfg["reinvest"] else "0",
         "m": cfg["sell_day_buy_mode"],
-    })
+    }
+    if flows:
+        params["c"] = flows_to_param(flows)
+    st.query_params.from_dict(params)
 
 
 if "cfg" not in st.session_state:
     st.session_state.cfg = cfg_from_url(load_config())
 cfg = st.session_state.cfg
+
+if "flows" not in st.session_state:
+    st.session_state.flows = flows_from_url()
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -114,16 +139,23 @@ def load_price_history(ticker: str, start: str, end: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def simulate(ticker, start, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode, reinvest):
-    """시작일부터 오늘까지 규칙대로 돌린다. 설정이 같으면 캐시에서 바로 나온다."""
+def simulate(ticker, start, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode, reinvest, flows):
+    """시작일부터 오늘까지 규칙대로 돌린다. 설정이 같으면 캐시에서 바로 나온다.
+
+    flows는 캐시 키가 되어야 하므로 튜플로 받는다.
+    존버(그냥 사서 놔두기)도 같은 입출금 조건으로 같이 돌려서 비교한다.
+    """
     hist = load_price_history(ticker, start, date.today().isoformat())
     res = run_jongsa(
         hist, "V5",
         initial_cash=cash, target_return=tgt, daily_buy_pct=pct, stop_days=int(stop),
         fee_rate=fee, whole_shares=whole, fee_in_target=fee_in_tgt,
-        sell_day_buy_mode=mode, reinvest=reinvest,
+        sell_day_buy_mode=mode, reinvest=reinvest, cash_flows=list(flows),
     )
-    return res, hist
+    bh = run_buy_and_hold(
+        hist, initial_cash=cash, fee_rate=fee, whole_shares=whole, cash_flows=list(flows)
+    )
+    return res, hist, bh
 
 
 # ============================================================ 설정 (맨 위)
@@ -169,9 +201,53 @@ with r2c4:
 daily_pct = 1 / splits
 rec = "  ✅ **추천 설정**" if splits == 10 and abs(tgt_pct - 2.75) < 0.01 and stop_days == 10 else ""
 st.caption(
-    f"하루 매수금 = {'어제 총자산' if reinvest else '시드'}의 **{daily_pct*100:.1f}%** "
+    f"하루 매수금 = {'어제 총자산' if reinvest else '넣은 돈'}의 **{daily_pct*100:.1f}%** "
     f"({splits}분할) · 목표 **+{tgt_pct:.2f}%** 도달 시 매도 · **{stop_days}영업일** 지나면 무조건 매도{rec}"
 )
+
+# ---------- 중간 입출금 ----------
+_flows = st.session_state.flows
+with st.expander(
+    f"💰 중간에 돈 넣고 뺀 기록 ({len(_flows)}건)" if _flows else "💰 중간에 돈 넣고 뺀 기록 — 없으면 안 열어도 됩니다",
+    expanded=bool(_flows),
+):
+    st.caption(
+        "투자 도중에 돈을 더 넣거나 뺐다면 여기에 적으세요. **매매 기록은 여전히 필요 없습니다.** "
+        "맨 아래 빈 줄에 입력하면 자동으로 한 줄이 늘어나고, 줄 왼쪽을 선택하고 Delete를 누르면 지워집니다."
+    )
+    _edit_df = pd.DataFrame(
+        [{"날짜": f["날짜"], "구분": "입금" if f["금액"] >= 0 else "출금", "금액($)": abs(f["금액"])}
+         for f in _flows]
+        or [{"날짜": None, "구분": "입금", "금액($)": None}]
+    )
+    edited = st.data_editor(
+        _edit_df, width="stretch", hide_index=True, num_rows="dynamic", key="flow_editor",
+        column_config={
+            "날짜": st.column_config.DateColumn(format="YYYY-MM-DD", width="medium"),
+            "구분": st.column_config.SelectboxColumn(options=["입금", "출금"], width="small"),
+            "금액($)": st.column_config.NumberColumn(min_value=0.0, step=100.0, format="%.0f"),
+        },
+    )
+
+    new_flows = []
+    for _, row in edited.iterrows():
+        if pd.isna(row["날짜"]) or pd.isna(row["금액($)"]) or float(row["금액($)"]) <= 0:
+            continue
+        amt = float(row["금액($)"])
+        new_flows.append({
+            "날짜": pd.Timestamp(row["날짜"]).date(),
+            "금액": -amt if row["구분"] == "출금" else amt,
+        })
+    new_flows.sort(key=lambda f: f["날짜"])
+    if new_flows != _flows:
+        st.session_state.flows = new_flows
+        st.rerun()
+
+    if _flows:
+        _in = sum(f["금액"] for f in _flows if f["금액"] > 0)
+        _out = -sum(f["금액"] for f in _flows if f["금액"] < 0)
+        # 스트림릿 마크다운은 $...$ 를 수식으로 읽어서 글자가 깨진다. 달러 기호를 escape.
+        st.caption(f"입금 합계 **\\${_in:,.0f}** · 출금 합계 **\\${_out:,.0f}**")
 
 # 설정이 바뀌면 조용히 저장해둔다 (다음에 열 때 그대로 뜨도록)
 new_cfg = {
@@ -182,19 +258,23 @@ new_cfg = {
 if any(cfg.get(k) != v for k, v in new_cfg.items()):
     cfg.update(new_cfg)
     save_config(cfg)   # 내 PC에서 켰을 때만 저장된다 (공용 서버에서는 무시)
-cfg_to_url(cfg)        # 주소에 설정을 실어둔다 — 즐겨찾기하면 이 설정으로 다시 열린다
+cfg_to_url(cfg, st.session_state.flows)  # 즐겨찾기하면 이 설정으로 다시 열린다
 
 # ============================================================ 계산
+flow_tuples = tuple((str(f["날짜"]), float(f["금액"])) for f in st.session_state.flows)
 try:
     with st.spinner("계산 중..."):
-        res, hist = simulate(
+        res, hist, bh_curve = simulate(
             ticker, start_d.isoformat(), float(seed), daily_pct, tgt_pct / 100, int(stop_days),
             fee_pct / 100, cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
-            cfg.get("sell_day_buy_mode", "never"), bool(reinvest),
+            cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
         )
 except Exception as e:
     st.error(f"계산 실패: {e}  — 종목코드와 시작일을 확인하세요.")
     st.stop()
+
+for _note in res.flow_notes:
+    st.warning(f"입출금 안내 — {_note}")
 
 log = res.daily_log
 last = log.iloc[-1]
@@ -204,21 +284,32 @@ shares = float(last["보유수량"])
 cash = float(last["예수금"])
 equity = float(last["평가금"])
 total = float(last["총자산"])
-profit = total - seed
 
 # ============================================================ 현황
-k = st.columns(6)
-k[0].metric("총자산", f"${total:,.0f}")
-k[1].metric("누적 손익금", f"${profit:+,.0f}")
-k[2].metric("누적 수익률", f"{(total/seed-1)*100:+.2f}%")
-k[3].metric("남은 현금", f"${cash:,.0f}", f"{cash/total*100:.0f}%")
-k[4].metric(f"{ticker} 현재가", f"${price:,.2f}", f"{(price/log.iloc[-2]['종가']-1)*100:+.2f}%" if len(log) > 1 else None)
-k[5].metric("현재 보유", f"{shares:,.0f}주", f"${equity:,.0f} · {int(last['보유건수'])}건")
+# 입출금이 있으면 '총자산/시드'는 수익률이 아니다. 넣은 돈 기준으로 계산한다.
+put_in = res.total_contributed
+profit = res.net_profit
+has_flows = bool(st.session_state.flows)
+
+k = st.columns(7 if has_flows else 6)
+i = 0
+k[i].metric("총자산", f"${total:,.0f}"); i += 1
+if has_flows:
+    k[i].metric("넣은 돈", f"${put_in:,.0f}", f"시드 ${seed:,.0f}"); i += 1
+k[i].metric("누적 손익금", f"${profit:+,.0f}"); i += 1
+k[i].metric("누적 수익률", f"{res.net_return_pct:+.2f}%"); i += 1
+k[i].metric("남은 현금", f"${cash:,.0f}", f"{cash/total*100:.0f}%" if total else None); i += 1
+k[i].metric(
+    f"{ticker} 현재가", f"${price:,.2f}",
+    f"{(price/log.iloc[-2]['종가']-1)*100:+.2f}%" if len(log) > 1 else None,
+); i += 1
+k[i].metric("현재 보유", f"{shares:,.0f}주", f"${equity:,.0f} · {int(last['보유건수'])}건")
 
 st.caption(
-    f"**{start_d} → {price_date}** 기준 · 종가 {price_date} · "
+    f"**{start_d} → {price_date}** 기준 · "
     f"매매 {res.num_trades}회 (익절 {res.num_target_sells} / 손절 {res.num_forced_sells}) · "
-    f"승률 {res.win_rate_pct:.1f}% · 최대낙폭 {res.mdd_pct:.1f}%"
+    f"승률 {res.win_rate_pct:.1f}% · **연평균 {res.cagr_pct:.1f}% · 최대낙폭 {res.mdd_pct:.1f}%**"
+    + ("  (연평균·최대낙폭은 입출금 효과를 뺀 전략 자체의 성적입니다)" if has_flows else "")
 )
 
 tab_home, tab_grid, tab_year, tab_help = st.tabs(
@@ -353,6 +444,52 @@ with tab_home:
             height=310,
         )
 
+    # ---------- 존버 vs 전략 ----------
+    st.markdown("### 🐢 존버 vs 전략")
+    st.caption(
+        f"**존버** = 첫날 시드 전액으로 {ticker}를 사서 그냥 놔둔 경우입니다. "
+        "입출금도 똑같이 반영해서 공정하게 비교합니다. **이 전략을 할 이유가 있는지 여기서 판단하세요.**"
+    )
+
+    bh_final = float(bh_curve.iloc[-1])
+    bh_dd = float(((bh_curve / bh_curve.cummax()) - 1).min() * 100)
+    bh_ret = (bh_final / put_in - 1) * 100 if put_in > 0 else float("nan")
+
+    v1, v2 = st.columns([1.35, 1])
+    with v1:
+        st.line_chart(
+            pd.DataFrame({"전략": res.equity_curve, f"존버 ({ticker} 그냥 보유)": bh_curve}),
+            height=330,
+        )
+    with v2:
+        st.dataframe(
+            pd.DataFrame([
+                {"항목": "지금 총자산", "전략": f"${total:,.0f}", "존버": f"${bh_final:,.0f}"},
+                {"항목": "순손익", "전략": f"${profit:+,.0f}", "존버": f"${bh_final - put_in:+,.0f}"},
+                {"항목": "수익률", "전략": f"{res.net_return_pct:+.1f}%", "존버": f"{bh_ret:+.1f}%"},
+                {"항목": "최대 낙폭", "전략": f"{res.mdd_pct:.1f}%", "존버": f"{bh_dd:.1f}%"},
+                {"항목": "주식 보유 비중", "전략": f"{res.avg_exposure_pct:.0f}%", "존버": "100%"},
+            ]),
+            width="stretch", hide_index=True, height=220,
+        )
+        if bh_final > total:
+            st.warning(
+                f"**이 기간에는 존버가 ${bh_final - total:,.0f} 더 벌었습니다.** "
+                f"대신 존버는 한때 {bh_dd:.0f}%까지 빠졌고 이 전략은 {res.mdd_pct:.0f}%였습니다. "
+                f"돈이 반토막 나는 걸 버틸 수 있냐가 갈림길입니다."
+            )
+        else:
+            st.success(
+                f"**이 기간에는 전략이 ${total - bh_final:,.0f} 더 벌었습니다.** "
+                f"낙폭도 존버 {bh_dd:.0f}% 대비 {res.mdd_pct:.0f}%로 얕았습니다."
+            )
+
+    st.caption(
+        f"평균적으로 자산의 **{res.avg_exposure_pct:.0f}%만 주식**이고 나머지는 현금입니다. "
+        "존버보다 수익이 낮게 나와도 이상한 게 아니라, 돈의 일부만 넣고 얻은 결과라는 뜻입니다. "
+        "**낙폭과 같이 보세요.**"
+    )
+
     st.caption(
         "⏰ LOC/MOC는 **미 동부 15:50(한국시간 새벽 4:50, 서머타임 해제 시 5:50)** 까지 넣어야 합니다. "
         "저녁에 미리 걸어두면 됩니다. · 보유일은 주말만 제외한 근사치라 미국 공휴일은 반영되지 않습니다."
@@ -381,6 +518,7 @@ with tab_grid:
         show, width="stretch", hide_index=True, height=620,
         column_config={
             "종가": st.column_config.NumberColumn(format="$%.2f"),
+            "입출금": st.column_config.NumberColumn(format="$%+.0f", help="양수는 입금, 음수는 출금"),
             "매수금액": st.column_config.NumberColumn(format="$%.2f"),
             "목표가": st.column_config.NumberColumn(format="$%.2f"),
             "매도금액": st.column_config.NumberColumn(format="$%.2f"),
@@ -388,6 +526,8 @@ with tab_grid:
             "평가금": st.column_config.NumberColumn(format="$%.0f"),
             "예수금": st.column_config.NumberColumn(format="$%.0f"),
             "총자산": st.column_config.NumberColumn(format="$%.0f"),
+            "넣은돈": st.column_config.NumberColumn(format="$%.0f"),
+            "순손익": st.column_config.NumberColumn(format="$%+.0f"),
             "수익률(%)": st.column_config.NumberColumn(format="%+.2f%%"),
             "최고자산대비(%)": st.column_config.NumberColumn(format="%.2f%%"),
         },
@@ -399,7 +539,9 @@ with tab_grid:
 
 # ============================================================ 연도별
 with tab_year:
-    eq, close = res.equity_curve, hist["Close"]
+    # 연도별 수익률은 TWR 곡선으로 계산한다. 실제 자산 곡선을 쓰면
+    # 그 해에 입금한 금액까지 '수익'으로 잡혀 버린다.
+    eq, close = res.twr_curve, hist["Close"]
     tr = res.trades.copy()
     if not tr.empty:
         tr["연도"] = pd.to_datetime(tr["매도일"]).dt.year
@@ -416,7 +558,7 @@ with tab_year:
             "연내 MDD(%)": round(((grp - grp.cummax()) / grp.cummax()).min() * 100, 1),
             "승률(%)": round((yt["손익"] > 0).mean() * 100, 1) if len(yt) else None,
             "매매": len(yt),
-            f"{ticker} 단순보유(%)": round((bh.iloc[-1] / bh.iloc[0] - 1) * 100, 1),
+            f"존버({ticker}) 수익률(%)": round((bh.iloc[-1] / bh.iloc[0] - 1) * 100, 1),
         })
     ydf = pd.DataFrame(rows)
 
@@ -429,9 +571,11 @@ with tab_year:
         m[1].metric("MDD", f"{res.mdd_pct:.2f}%")
         m[2].metric("효율", f"{res.cagr_pct / -res.mdd_pct:.2f}" if res.mdd_pct else "—")
         st.line_chart(
-            pd.DataFrame({"이 전략": eq, f"{ticker} 단순보유": close / close.iloc[0] * seed}),
+            pd.DataFrame({"이 전략": res.equity_curve, f"존버 ({ticker})": bh_curve}),
             height=330,
         )
+        if has_flows:
+            st.caption("표의 연도별 수치는 입출금 효과를 뺀 값이고, 위 그래프는 실제 자산 금액입니다.")
 
     if len(ydf) >= 3:
         full = ydf.iloc[1:-1]
@@ -441,10 +585,10 @@ with tab_year:
             f"최저 {full['수익률(%)'].min():.1f}% · 연내 낙폭 평균 {full['연내 MDD(%)'].mean():.1f}% "
             f"(최악 {full['연내 MDD(%)'].min():.1f}%) — 첫 해·마지막 해는 부분연도라 제외"
         )
-    bh_dd = ((close / close.cummax()) - 1).min() * 100
+    _bhdd = ((bh_curve / bh_curve.cummax()) - 1).min() * 100
     st.caption(
-        f"같은 기간 {ticker} 단순보유는 {(close.iloc[-1]/close.iloc[0]-1)*100:,.0f}% 올랐지만 "
-        f"한때 {bh_dd:.1f}%까지 빠졌습니다. 이 전략은 {res.mdd_pct:.1f}%. "
+        f"같은 기간 존버({ticker})는 {(close.iloc[-1]/close.iloc[0]-1)*100:,.0f}% 올랐지만 "
+        f"한때 {_bhdd:.1f}%까지 빠졌습니다. 이 전략은 {res.mdd_pct:.1f}%. "
         "수익률만 보지 말고 낙폭 차이를 꼭 같이 보세요."
     )
 

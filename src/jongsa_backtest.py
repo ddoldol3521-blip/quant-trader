@@ -51,6 +51,17 @@ class JongsaResult:
     avg_open_lots: float = 0.0
     cash_exhausted_days: int = 0
     final_value: float = 0.0
+    # ----- 중간 입출금 관련 -----
+    # 입출금이 있으면 '총자산 / 시드 - 1'은 수익률이 아니게 된다.
+    # (돈을 더 넣어서 자산이 는 것과 벌어서 는 것을 구분할 수 없다)
+    # 그래서 넣은 돈 합계(contributed)를 따로 들고, 성적 지표는 입출금 효과를
+    # 제거한 시간가중수익률(TWR) 곡선에서 계산한다.
+    twr_curve: pd.Series = field(default_factory=pd.Series)
+    contributed_curve: pd.Series = field(default_factory=pd.Series)
+    total_contributed: float = 0.0
+    net_profit: float = 0.0
+    net_return_pct: float = 0.0
+    flow_notes: list = field(default_factory=list)
 
 
 def _metrics(equity: pd.Series, initial_cash: float, n_days: int) -> tuple:
@@ -60,6 +71,36 @@ def _metrics(equity: pd.Series, initial_cash: float, n_days: int) -> tuple:
     running_max = equity.cummax()
     dd = (equity - running_max) / running_max
     return cagr, float(dd.min()) * 100, dd
+
+
+def _resolve_flows(cash_flows, dates) -> tuple:
+    """입출금 (날짜, 금액) 목록을 거래일 인덱스별 금액 배열로 바꾼다.
+
+    주말·공휴일에 넣은 돈은 다음 거래일에 반영한다.
+    시작일 이전이면 첫 거래일로, 마지막 거래일 이후면 무시하고 안내를 남긴다.
+    """
+    n = len(dates)
+    flows = np.zeros(n)
+    notes = []
+    if not cash_flows:
+        return flows, notes
+
+    for item in cash_flows:
+        try:
+            d, amt = item[0], float(item[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if amt == 0:
+            continue
+        ts = pd.Timestamp(d)
+        idx = int(dates.searchsorted(ts, side="left"))
+        if idx >= n:
+            notes.append(f"{ts.date()} {amt:+,.0f} — 마지막 거래일 이후라 반영하지 않았습니다.")
+            continue
+        if dates[idx] != ts:
+            notes.append(f"{ts.date()}는 거래일이 아니라 {dates[idx].date()}에 반영했습니다.")
+        flows[idx] += amt
+    return flows, notes
 
 
 def run_jongsa(
@@ -79,6 +120,7 @@ def run_jongsa(
     fee_in_target: bool = False,
     sell_day_buy_mode: str = "never",
     reinvest: bool = True,
+    cash_flows=None,
     dd_thresholds=(-0.20, -0.25, -0.30),
 ) -> JongsaResult:
     """종사종팔 백테스트.
@@ -90,6 +132,9 @@ def run_jongsa(
         'rolling_accum'   — 위와 같되 증액분을 기존에 누적
         'block_10d'       — 10일마다 한 번씩만 갱신
     whole_shares: True면 정수주만 매수
+    cash_flows: 중간 입출금 [(날짜, 금액), ...]. 양수는 입금, 음수는 출금.
+        출금액이 예수금보다 크면 규칙을 어기고 강제 매도하지 않고,
+        가능한 만큼만 빼고 나머지는 예수금이 생길 때까지 이월한다.
     """
     close = df["Close"].astype(float).values
     dates = df.index
@@ -115,11 +160,50 @@ def run_jongsa(
 
     prev_total_assets = float(initial_cash)
 
+    flows, flow_notes = _resolve_flows(cash_flows, dates)
+    contributed = float(initial_cash)     # 지금까지 내가 넣은 돈 (출금하면 줄어든다)
+    applied_flows = np.zeros(n)           # 실제로 반영된 금액 (출금은 예수금 한도)
+    contributed_arr = np.zeros(n)
+    pending_withdrawal = 0.0              # 예수금이 모자라 아직 못 뺀 출금액
+
     for t in range(n):
         price = close[t]
         sell_qty_today = 0.0
         sell_amt_today = 0.0
         sell_reasons: list[str] = []
+
+        # ---------- 0) 입출금 ----------
+        # 그날 매매를 판단하기 전에 먼저 반영한다. 입금한 돈은 그날 바로 쓸 수 있다.
+        flow_today = 0.0
+        if flows[t] > 0:
+            cash += flows[t]
+            contributed += flows[t]
+            flow_today += flows[t]
+        if flows[t] < 0:
+            # 가진 돈보다 많이 빼겠다는 건 입력 실수다. 있는 만큼으로 자른다.
+            want = -flows[t]
+            have = cash + shares * price
+            if want > have:
+                flow_notes.append(
+                    f"{dates[t].date()} 출금 ${want:,.0f} 요청 — 그 시점 총자산이 "
+                    f"${have:,.0f}뿐이라 전액 출금으로 처리했습니다."
+                )
+                want = have
+            pending_withdrawal += want
+        if pending_withdrawal > 0:
+            # 규칙을 어기면서까지 팔지는 않는다. 예수금 범위에서만 뺀다.
+            take = min(pending_withdrawal, cash)
+            if take > 0:
+                cash -= take
+                contributed -= take
+                flow_today -= take
+                pending_withdrawal -= take
+            if pending_withdrawal > 1e-6 and flows[t] < 0:
+                flow_notes.append(
+                    f"{dates[t].date()} 출금 요청분 중 ${pending_withdrawal:,.0f}는 "
+                    f"예수금이 모자라 미뤘습니다 (보유분을 강제로 팔지 않습니다)."
+                )
+        applied_flows[t] = flow_today
 
         # ---------- 1) 매도 판정 ----------
         did_sell = False
@@ -199,8 +283,9 @@ def run_jongsa(
                     # 번 돈까지 굴린다 — 자산이 늘면 하루 매수금도 같이 늘어난다
                     desired = prev_total_assets * daily_buy_pct
                 else:
-                    # 재투자 안 함 — 하루 매수금을 처음 시드 기준으로 고정
-                    desired = initial_cash * daily_buy_pct
+                    # 재투자 안 함 — 하루 매수금을 '넣은 돈' 기준으로 고정.
+                    # 중간에 입금하면 그만큼은 늘어나야 한다. 벌어들인 이익만 제외한다.
+                    desired = contributed * daily_buy_pct
             else:  # V4
                 if t > 0:
                     should_update = True
@@ -260,12 +345,14 @@ def run_jongsa(
         equity[t] = total
         exposure[t] = (shares * price / total) if total > 0 else 0.0
         open_lot_counts[t] = len(open_lots)
+        contributed_arr[t] = contributed
         prev_total_assets = total
 
         log_rows.append(
             {
                 "날짜": dates[t],
                 "종가": round(price, 4),
+                "입출금": round(applied_flows[t], 2) if abs(applied_flows[t]) > 1e-9 else None,
                 "매수금액": round(buy_amt_today, 2) if buy_amt_today else None,
                 "매수수량": round(buy_qty_today) if buy_qty_today else None,
                 "목표가": round(buy_target_today, 2) if buy_target_today else None,
@@ -278,20 +365,38 @@ def run_jongsa(
                 "평가금": round(shares * price, 2),
                 "예수금": round(cash, 2),
                 "총자산": round(total, 2),
-                "수익률(%)": round((total / initial_cash - 1) * 100, 2),
+                "넣은돈": round(contributed, 2),
+                "순손익": round(total - contributed, 2),
+                "수익률(%)": round((total / contributed - 1) * 100, 2) if contributed > 0 else None,
             }
         )
 
     equity_s = pd.Series(equity, index=dates, name="equity")
     exposure_s = pd.Series(exposure, index=dates, name="exposure")
+    contributed_s = pd.Series(contributed_arr, index=dates, name="contributed")
     trades_df = pd.DataFrame(trades)
+
+    # ----- 시간가중수익률(TWR) 곡선 -----
+    # 입금하면 총자산이 껑충 뛴다. 그 점프를 그대로 두면 CAGR은 부풀고
+    # MDD는 왜곡된다(입금일이 새 최고점이 되어 버린다). 그래서 매일의 수익률을
+    # '그날 입금분을 제외한 시작 자산' 대비로 계산한 뒤 이어 붙인다.
+    # 결과는 '입출금 없이 시드만 굴렸다면 어땠을까' 곡선이다.
+    twr = np.zeros(n)
+    idx_val = float(initial_cash)
+    for t in range(n):
+        base = (equity[t - 1] if t > 0 else float(initial_cash)) + applied_flows[t]
+        if base > 1e-9:
+            idx_val *= equity[t] / base
+        twr[t] = idx_val
+    twr_s = pd.Series(twr, index=dates, name="twr")
 
     log_df = pd.DataFrame(log_rows)
     if not log_df.empty:
-        run_max = log_df["총자산"].cummax()
-        log_df["최고자산대비(%)"] = ((log_df["총자산"] / run_max - 1) * 100).round(2)
+        # 낙폭도 TWR 기준이어야 '입금해서 최고점 경신'이 안 생긴다
+        run_max = twr_s.cummax().values
+        log_df["최고자산대비(%)"] = ((twr_s.values / run_max - 1) * 100).round(2)
 
-    cagr, mdd, dd = _metrics(equity_s, initial_cash, n)
+    cagr, mdd, dd = _metrics(twr_s, initial_cash, n)
 
     if not trades_df.empty:
         wins = int((trades_df["손익"] > 0).sum())
@@ -330,7 +435,62 @@ def run_jongsa(
         avg_open_lots=float(open_lot_counts.mean()),
         cash_exhausted_days=cash_exhausted,
         final_value=float(equity_s.iloc[-1]),
+        twr_curve=twr_s,
+        contributed_curve=contributed_s,
+        total_contributed=float(contributed),
+        net_profit=float(equity_s.iloc[-1] - contributed),
+        net_return_pct=float((equity_s.iloc[-1] / contributed - 1) * 100) if contributed > 0 else float("nan"),
+        flow_notes=flow_notes,
     )
+
+
+def run_buy_and_hold(
+    df: pd.DataFrame,
+    initial_cash: float = 10_000.0,
+    fee_rate: float = 0.0,
+    whole_shares: bool = True,
+    cash_flows=None,
+) -> pd.Series:
+    """'존버' 비교용 — 첫날 전액 매수하고 그냥 들고 있는다.
+
+    같은 조건에서 비교해야 의미가 있으므로 입출금도 똑같이 반영한다.
+    입금하면 그날 종가로 더 사고, 출금하면 그날 종가로 그만큼 판다.
+    """
+    close = df["Close"].astype(float).values
+    dates = df.index
+    n = len(close)
+    flows, _ = _resolve_flows(cash_flows, dates)
+
+    cash = float(initial_cash)
+    shares = 0.0
+    values = np.zeros(n)
+
+    for t in range(n):
+        price = close[t]
+        cash += flows[t] if flows[t] > 0 else 0.0
+
+        if flows[t] < 0:  # 출금 — 예수금 먼저 쓰고 모자라면 판다
+            need = -flows[t]
+            take = min(cash, need)
+            cash -= take
+            need -= take
+            if need > 1e-9 and shares > 0:
+                sell_qty = min(shares, need / (price * (1 - fee_rate)))
+                shares -= sell_qty
+                cash += sell_qty * price * (1 - fee_rate) - need
+                cash = max(cash, 0.0)
+
+        if cash > 0:  # 남은 현금은 전부 주식으로 (존버니까)
+            qty = cash * (1 - fee_rate) / price
+            if whole_shares:
+                qty = float(int(qty))
+            if qty > 0:
+                cash -= qty * price * (1 + fee_rate)
+                shares += qty
+
+        values[t] = cash + shares * price
+
+    return pd.Series(values, index=dates, name="buy_and_hold")
 
 
 def summarize(result: JongsaResult, label: str = "") -> dict:
