@@ -395,16 +395,29 @@ except Exception as e:
         "대신 **오늘 넣을 첫 주문**을 아래에 정리했습니다."
     )
 
+    pc1, pc2 = st.columns([1, 2.4])
+    with pc1:
+        buy_px = st.number_input(
+            "매수가 ($)", 0.01, value=px, step=0.01, format="%.2f",
+            help="주문 전에는 예상가(기본값=마지막 종가), 체결 후에는 실제 체결가를 넣으세요.",
+        )
+    with pc2:
+        st.caption(
+            f"기본값은 **{px_date}의 마지막 종가 \\${px:,.2f}** 입니다.\n\n"
+            "**체결되고 나면 실제 체결가를 여기에 넣으세요.** "
+            "그래야 목표가가 정확해집니다 (목표가는 *실제 산 가격* 기준이라야 맞습니다)."
+        )
+
     first_budget = seed * daily_pct
-    first_qty = int(first_budget * (1 - fee_pct / 100) / px) if cfg.get("whole_shares", True) \
-        else first_budget * (1 - fee_pct / 100) / px
-    first_cost = first_qty * px * (1 + fee_pct / 100)
-    first_target = target_price_for(px, cfg)
+    first_qty = int(first_budget * (1 - fee_pct / 100) / buy_px) if cfg.get("whole_shares", True) \
+        else first_budget * (1 - fee_pct / 100) / buy_px
+    first_cost = first_qty * buy_px * (1 + fee_pct / 100)
+    first_target = target_price_for(buy_px, cfg)
 
     f1, f2, f3, f4 = st.columns(4)
     f1.metric("시드", f"${seed:,.0f}")
     f2.metric("오늘 살 금액", f"${first_cost:,.2f}", f"시드의 {daily_pct*100:.1f}%")
-    f3.metric("수량", f"{first_qty:,.0f}주", f"@ ${px:,.2f}")
+    f3.metric("수량", f"{first_qty:,.0f}주", f"@ ${buy_px:,.2f}")
     f4.metric("목표가", f"${first_target:,.2f}", f"+{tgt_pct:.2f}%")
 
     st.markdown("### 📋 오늘 넣을 주문")
@@ -430,10 +443,13 @@ except Exception as e:
 그날그날 뭘 사고 팔지 알아서 계산해줍니다.
 """
     )
-    st.caption(
-        f"기준 종가: {px_date} \\${px:,.2f} · 실제 체결가는 오늘 종가라 조금 다를 수 있습니다. "
-        f"수량은 예산을 넘지 않게 내림했습니다."
+    st.warning(
+        f"**체결되면 실제 체결가를 위 '매수가' 칸에 넣어서 목표가를 다시 확인하세요.** "
+        f"지금 \\${buy_px:,.2f} 기준 목표가는 \\${first_target:.2f}인데, "
+        f"예를 들어 \\${buy_px * 1.015:,.2f}에 체결됐다면 목표가는 "
+        f"\\${target_price_for(buy_px * 1.015, cfg):.2f}가 됩니다."
     )
+    st.caption("수량은 예산을 넘지 않게 내림했습니다.")
     with st.expander("📖 이 전략 규칙 한눈에 보기", expanded=True):
         st.markdown(RULES_MD.format(
             tgt=f"{tgt_pct:.2f}", stop=int(stop_days), splits=int(splits),
@@ -567,15 +583,38 @@ with tab_home:
         else:
             st.error(f"### 오늘은 매수 없음\n\n{buy['reason']}")
 
-        if buy["type"]:
-            st.caption(
-                f"체결되면 → 목표가 **\\${target_price_for(buy['limit'] or price, cfg):.2f}** 로 "
-                f"내일부터 LOC 매도 · **{(date.today() + timedelta(days=int(stop_days*1.45))).isoformat()} "
-                f"무렵** 까지 미달이면 MOC 손절"
-            )
         if plan["부족"] and buy["type"]:
             st.warning(
                 f"예수금 부족 — 목표 \\${plan['목표금액']:,.0f} 중 \\${cash:,.0f}만 가능합니다."
+            )
+
+    # ---------- 체결가 -> 목표가 계산기 ----------
+    if buy["type"]:
+        st.markdown("### 🧮 체결되면 목표가 계산하기")
+        st.caption(
+            "**주문은 종가에 체결되는데, 그 종가는 지금 알 수 없습니다.** "
+            + ("LOC 매수는 **지정가가 아니라 그날 종가**로 체결됩니다 (지정가보다 쌀 수 있음). "
+               if buy["type"] == "LOC" else "")
+            + "그래서 체결되고 나면 **실제 체결가**를 넣어 목표가를 다시 뽑으세요. "
+              "목표가는 실제 산 가격 기준이라야 맞습니다."
+        )
+        g1, g2, g3, g4 = st.columns([1, 1, 1, 2])
+        with g1:
+            fill_px = st.number_input(
+                "실제 체결가 ($)", 0.01,
+                value=float(buy["limit"] or price), step=0.01, format="%.2f",
+            )
+        g2.metric("목표가 (LOC 매도)", f"${target_price_for(fill_px, cfg):,.2f}", f"+{tgt_pct:.2f}%")
+        g3.metric(
+            "손절 예정일",
+            (date.today() + timedelta(days=int(stop_days * 1.45))).isoformat(),
+            f"{stop_days}영업일 뒤",
+        )
+        with g4:
+            st.caption(
+                f"내일부터 이 물량에 **LOC 매도 \\${target_price_for(fill_px, cfg):.2f}** 를 걸어두시면 됩니다. "
+                f"그 전에 손절 예정일이 오면 **MOC로 무조건 매도**입니다.\n\n"
+                f"미체결이면 아무것도 안 하고 내일 이 화면을 다시 보시면 됩니다."
             )
 
     b1, b2 = st.columns([1.15, 1])
