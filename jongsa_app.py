@@ -27,17 +27,66 @@ st.set_page_config(page_title="종사종팔 V5", page_icon="🔁", layout="wide"
 st.markdown(
     """
 <style>
-  /* 화면은 꽉 채운다. 구분은 '검은 선'으로 하고 여백을 어둡게 만들지 않는다. */
-  .block-container {padding: 0.6rem 1.1rem 1.2rem 1.1rem; max-width: 100%;}
+  /* 빈 여백은 어둡게, 글이 있는 안쪽만 밝게. 폭은 화면을 꽉 채운다. */
+  .stApp, [data-testid="stAppViewContainer"] {background: #0F1218;}
+  [data-testid="stHeader"] {background: #0F1218;}
 
-  /* 숫자 카드 — 흰 바탕에 검은 테두리로 칸을 나눈다 */
+  /* 본문 판은 투명 — 요소가 없는 자리는 어두운 바탕이 그대로 보인다 */
+  .block-container {
+      background: transparent;
+      max-width: 100%;
+      padding: 0.6rem 0.8rem 1.4rem 0.8rem;
+  }
+
+  /* 글·표·차트가 놓이는 자리에만 흰 판을 깐다 */
+  [data-testid="stMarkdownContainer"],
+  [data-testid="stCaptionContainer"],
+  [data-testid="stDataFrame"],
+  [data-testid="stExpander"] details,
+  [data-testid="stVegaLiteChart"],
+  .stDateInput > div, .stTextInput > div, .stNumberInput > div,
+  .stRadio > div, .stCheckbox, .stSlider > div, .stSelectbox > div {
+      background: #FFFFFF;
+      border-radius: 6px;
+  }
+  [data-testid="stMarkdownContainer"],
+  [data-testid="stCaptionContainer"] {padding: 2px 8px;}
+
+  /* 위젯 이름표(라벨)도 흰 판 위에.
+     도움말(?) 아이콘이 붙은 칸만 라벨이 한 줄 더 차지해서 입력칸이 아래로
+     밀렸다. 높이를 맞추고 아이콘을 같은 줄에 세운다. */
+  label[data-testid="stWidgetLabel"] {
+      background: #FFFFFF; border-radius: 6px 6px 0 0;
+      padding: 3px 8px 1px 8px;
+      display: inline-flex; align-items: center; gap: 5px;
+      min-height: 26px;
+  }
+  label[data-testid="stWidgetLabel"] > div {display: flex; align-items: center;}
+
+  /* 탭 막대는 어두운 바탕 위에 그대로 둔다.
+     탭 글씨는 위의 '흰 판' 규칙에서 빼야 한다 (흰 판에 흰 글씨가 되어 사라진다) */
+  .stTabs [data-baseweb="tab-list"] {background: transparent;}
+  .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] {
+      background: transparent !important; padding: 0 !important;
+  }
+  .stTabs [data-baseweb="tab"] {background: #FFFFFF;}
+  .stTabs [aria-selected="true"] {background: #14181F !important;}
+
+  /* 어두운 바탕 위에 바로 놓이는 글자는 밝게 (탭 라벨 등) */
+  .stTabs [data-baseweb="tab"] p {color: #3C4557;}
+  .stTabs [aria-selected="true"] p {color: #FFFFFF !important;}
+
+  /* 숫자 카드 — 높이를 맞춰 줄이 어긋나지 않게 */
   [data-testid="stMetric"] {
       background: #FFFFFF;
       border: 1.5px solid #14181F;
       border-radius: 6px; padding: 10px 14px;
+      min-height: 92px;
+      display: flex; flex-direction: column; justify-content: center;
   }
   [data-testid="stMetricLabel"] p {font-size: 0.8rem; color: #3C4557; font-weight: 500;}
   [data-testid="stMetricValue"] {font-size: 1.45rem; font-weight: 700; color: #0B0E13;}
+  [data-testid="stMetricDelta"] {font-size: 0.78rem;}
 
   [data-testid="stVerticalBlock"] {gap: 0.5rem;}
   [data-testid="stHorizontalBlock"] {gap: 0.55rem;}
@@ -51,22 +100,23 @@ st.markdown(
       padding-bottom: 4px; border-bottom: 2px solid #14181F;
   }
 
-  /* 탭 — 상단에 크고 뚜렷하게 */
-  .stTabs [data-baseweb="tab-list"] {
-      gap: 4px; border-bottom: 2.5px solid #14181F; margin-bottom: 0.5rem;
+  /* 탭 — 상단에 크고 뚜렷하게.
+     이 스트림릿 버전에는 data-baseweb="tab" 속성이 없다. [role="tab"]을 써야 한다. */
+  [role="tablist"] {gap: 4px; margin-bottom: 0.4rem; border-bottom: none;}
+  [role="tab"] {
+      padding: 11px 22px !important; border-radius: 8px 8px 0 0;
+      background: #FFFFFF;
   }
-  .stTabs [data-baseweb="tab"] {
-      padding: 12px 24px; border-radius: 8px 8px 0 0;
-      font-size: 1.02rem; font-weight: 600; color: #5A6474;
-      border: 1.5px solid transparent; border-bottom: none;
+  [role="tab"] p {font-size: 1.02rem !important; font-weight: 600; color: #3C4557;}
+  [role="tab"][aria-selected="true"] {background: #14181F !important;}
+  [role="tab"][aria-selected="true"] p {color: #FFFFFF !important; font-weight: 700;}
+  /* 탭 글자는 '흰 판' 규칙에서 뺀다 (흰 판에 흰 글씨가 되어 사라진다) */
+  [role="tab"] [data-testid="stMarkdownContainer"] {
+      background: transparent !important; padding: 0 !important;
   }
-  .stTabs [aria-selected="true"] {
-      background: #14181F; color: #FFFFFF !important;
-      border-color: #14181F;
-  }
-  .stTabs [aria-selected="true"] p {color: #FFFFFF !important; font-weight: 700;}
   /* 백테스트 안쪽 하위 탭은 한 단계 작게 */
-  .stTabs .stTabs [data-baseweb="tab"] {padding: 7px 16px; font-size: 0.92rem;}
+  [role="tabpanel"] [role="tab"] {padding: 7px 15px !important;}
+  [role="tabpanel"] [role="tab"] p {font-size: 0.92rem !important;}
 
   /* 표 — 검은 테두리로 칸을 확실히 */
   .stDataFrame {border-radius: 6px; border: 1.5px solid #14181F;}
