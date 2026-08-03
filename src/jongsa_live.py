@@ -179,6 +179,70 @@ def target_price_for(price: float, cfg: dict) -> float:
     return tgt
 
 
+def order_plan(lots: list, cash: float, base_assets: float, cfg: dict, today: str = None) -> dict:
+    """오늘 장 마감에 넣을 주문을 만든다.
+
+    핵심: **주문을 넣는 시점에는 오늘 종가를 모른다.** 그래서 '매도가 있는 날은
+    매수하지 않는다'는 규칙을 지키려면 가격 조건으로 바꿔 걸어야 한다.
+
+        매수 LOC 지정가 = (오늘 매도될 수 있는 목표가 중 가장 낮은 값) - 0.01
+
+    - 종가가 그 목표가에 닿으면 -> 매도 체결 + 매수는 미체결 (지정가보다 높으니까)
+    - 안 닿으면 -> 매도 없음 + 매수만 체결
+    한 번의 주문으로 규칙이 저절로 지켜진다. (원 작성자가 공유한 요령)
+
+    10영업일이 찬 건은 가격과 무관하게 팔아야 하므로 날짜만 보면 미리 알 수 있다.
+    그런 날은 아예 매수 주문을 넣지 않는다.
+    """
+    today = today or _today_str()
+    stop_days = int(cfg["stop_days"])
+
+    forced, pending = [], []
+    for lot in lots:
+        held = business_days_between(lot["buy_date"], today)
+        row = {**lot, "보유영업일": held}
+        if held >= stop_days:
+            forced.append(row)
+        elif held >= 1:
+            pending.append(row)   # 종가가 목표가 이상이면 팔린다
+        # held == 0 (어제 산 것)은 오늘 매도 대상이 아니다
+
+    desired = base_assets * cfg["daily_buy_pct"]
+    budget = min(desired, max(cash, 0.0))
+    fee = cfg.get("fee_rate", 0.0)
+
+    buy = {"type": None, "limit": None, "budget": budget, "qty": 0.0, "cost": 0.0, "reason": ""}
+
+    if forced:
+        buy["reason"] = f"{stop_days}영업일이 찬 건이 있어 오늘은 무조건 매도일입니다 (매수 안 함)"
+    elif budget <= 0:
+        buy["reason"] = "예수금이 없습니다"
+    else:
+        if pending:
+            buy["type"] = "LOC"
+            buy["limit"] = round(min(p["target_price"] for p in pending) - 0.01, 2)
+            buy["reason"] = "매도될 수도 있는 날 — 지정가 아래로 마감할 때만 사도록 걸어둡니다"
+        else:
+            buy["type"] = "MOC"
+            buy["reason"] = "오늘 팔 게 없으니 종가에 그냥 삽니다"
+
+        px = buy["limit"] if buy["type"] == "LOC" else cfg.get("_last_close", 0.0)
+        if px and px > 0:
+            qty = budget * (1 - fee) / px
+            if cfg.get("whole_shares", True):
+                qty = float(int(qty))
+            buy["qty"] = qty
+            buy["cost"] = qty * px * (1 + fee)
+
+    return {
+        "강제매도": forced,
+        "목표매도": pending,
+        "매수": buy,
+        "부족": desired > cash + 1e-9,
+        "목표금액": desired,
+    }
+
+
 def business_days_between(start: str, end: str) -> int:
     """두 날짜 사이 영업일 수 (주말만 제외, 공휴일은 미반영).
 

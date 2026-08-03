@@ -19,7 +19,7 @@ from src.jongsa_backtest import run_buy_and_hold, run_jongsa
 from src.jongsa_live import PRESETS, SELL_DAY_MODES
 from src.jongsa_live import business_days_between as bdays
 from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
-from src.jongsa_live import target_price_for
+from src.jongsa_live import order_plan, target_price_for
 
 st.set_page_config(page_title="종사종팔 V5", page_icon="🔁", layout="wide")
 
@@ -128,6 +128,101 @@ def cfg_to_url(cfg: dict, flows: list) -> None:
 if "cfg" not in st.session_state:
     st.session_state.cfg = cfg_from_url(load_config())
 cfg = st.session_state.cfg
+
+# 원 작성자가 공유한 V5 규칙을, 처음 하는 사람이 읽을 수 있게 옮긴 것.
+RULES_MD = """
+### 하루에 딱 두 가지만 봅니다
+
+**① 팔 것이 있나** → **② 없으면 산다.** 이게 전부입니다.
+
+---
+
+### 1) 팔 것 — 두 종류뿐입니다
+
+| | 언제 | 주문 |
+|---|---|---|
+| 🎯 **익절** | 산 가격보다 **{tgt}% 위**로 종가가 마감되면 | **LOC 매도** (목표가 지정) |
+| 🛑 **손절** | 산 지 **{stop}영업일**이 되면 (가격 무관) | **MOC 매도** (무조건 체결) |
+
+**손절일 세는 법** — 달력 날짜가 아니라 **장 열린 날**로 셉니다.
+
+```
+1월 3일 매수 체결   → 0일  (산 날은 0일)
+1월 6일             → 1일  (다음 거래일부터 1일)
+   ...
+1월 17일            → 10일 ← 이날 MOC 매도
+```
+
+주말·공휴일은 안 셉니다.
+
+---
+
+### 2) 살 것 — 하루 **{pct}%** ({splits}분할)
+
+**"판 게 있는 날은 사지 않는다."** 이게 이 전략의 핵심 규칙입니다.
+
+> ❓ **그런데 오늘 팔릴지 안 팔릴지 주문 넣을 땐 모르잖아요?**
+>
+> 그래서 이렇게 겁니다:
+>
+> ### 매수 LOC 지정가 = (오늘 팔릴 수 있는 목표가 중 **가장 낮은 값**) − $0.01
+>
+> - 종가가 목표가에 **닿으면** → 매도 체결, **매수는 자동 미체결** ✅
+> - 종가가 목표가에 **안 닿으면** → 매도 없음, **매수만 체결** ✅
+>
+> 주문 하나로 규칙이 저절로 지켜집니다.
+
+**손절일(10영업일)이 걸린 날**은 가격과 상관없이 무조건 파는 날이라, **매수 주문 자체를 넣지 않습니다.** 날짜만 보면 미리 알 수 있어요.
+
+**보유한 게 하나도 없으면** 그냥 **MOC 매수**하면 됩니다.
+
+---
+
+### 3) 몇 분할로 할까
+
+| 분할 | 하루 매수 | 누구에게 |
+|---|---|---|
+| **10분할** | 총자산의 10% | **기본값. 처음이면 여기서 시작** |
+| 7분할 | 약 14% | 익숙해진 뒤 |
+| 5분할 | 20% | 원문 표현으로 "용감하면" |
+
+10분할이 기본인 이유: 매도하는 날은 안 사기 때문에 시드가 다 소진되는 일이 잘 없습니다.
+
+---
+
+### 4) 복리 — V5는 **100% 복리**입니다
+
+번 돈도 잃은 돈도 **전부 다음 매수금에 반영**합니다.
+어제 마감 총자산의 {pct}%를 오늘 삽니다. 계산이 제일 단순합니다.
+
+(앱의 **수익 재투자 ⭕** 가 이 방식입니다)
+
+---
+
+### 5) 퉁치기? V5는 신경 안 써도 됩니다
+
+매수가를 매도가보다 높게 걸 일이 없어서 **같은 날 사고파는 일이 안 생깁니다.**
+(V3에서만 생기는 문제입니다)
+
+---
+
+### 📌 원문 기준 성적
+
+**CAGR 약 30% / MDD 약 -30%**
+
+MDD -30%는 **한때 내 돈이 30% 줄어드는 구간이 있었다**는 뜻입니다.
+{ticker}가 3배 레버리지라 실제로 그런 구간이 여러 번 있었습니다.
+
+---
+
+### ⛔ 절대 하면 안 되는 것
+
+- 목표가 왔는데 "더 오를 것 같아서" 안 팔기
+- 손절일인데 "곧 오를 것 같아서" 안 팔기
+- 무서워서 중간에 다 팔아버리기
+
+**이걸 어기면 위 성적은 아무 의미가 없습니다.**
+"""
 
 if "flows" not in st.session_state:
     st.session_state.flows = flows_from_url()
@@ -275,13 +370,75 @@ try:
             cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
         )
 except Exception as e:
-    if "거래일이 2일 미만" in str(e):
-        st.error(
-            "**시작일이 너무 최근입니다.** 장이 열린 날이 이틀은 있어야 계산이 됩니다.\n\n"
-            "며칠 앞으로 당겨보세요. (주말·공휴일은 장이 안 열립니다)"
+    # 시작일이 너무 최근이라 돌릴 게 없는 것인지, 종목 자체가 잘못된 것인지 가른다.
+    # 최근 시세가 받아지면 종목은 멀쩡한 것이므로 '이제 막 시작' 상태로 본다.
+    try:
+        recent = load_price_history(
+            ticker, (date.today() - timedelta(days=40)).isoformat(), date.today().isoformat()
         )
-    else:
-        st.error(f"계산 실패: {e}  — 종목코드와 시작일을 확인하세요.")
+    except Exception:
+        recent = None
+
+    if recent is None or recent.empty:
+        st.error(
+            f"**{ticker} 시세를 못 받았습니다.** 종목코드를 확인해주세요. "
+            f"(미국 종목은 티커, 한국 종목은 6자리 숫자)\n\n원인: {e}"
+        )
+        st.stop()
+
+    # ---------- 오늘부터 시작하는 경우 ----------
+    # 지나간 날이 없으니 백테스트는 못 하지만, '오늘 얼마 사면 되는지'는 알려줄 수 있다.
+    px = float(recent["Close"].iloc[-1])
+    px_date = recent.index[-1].date()
+    st.info(
+        f"**{start_d}부터 시작하시는군요.** 아직 지나간 날이 없어서 성적표는 없습니다. "
+        "대신 **오늘 넣을 첫 주문**을 아래에 정리했습니다."
+    )
+
+    first_budget = seed * daily_pct
+    first_qty = int(first_budget * (1 - fee_pct / 100) / px) if cfg.get("whole_shares", True) \
+        else first_budget * (1 - fee_pct / 100) / px
+    first_cost = first_qty * px * (1 + fee_pct / 100)
+    first_target = target_price_for(px, cfg)
+
+    f1, f2, f3, f4 = st.columns(4)
+    f1.metric("시드", f"${seed:,.0f}")
+    f2.metric("오늘 살 금액", f"${first_cost:,.2f}", f"시드의 {daily_pct*100:.1f}%")
+    f3.metric("수량", f"{first_qty:,.0f}주", f"@ ${px:,.2f}")
+    f4.metric("목표가", f"${first_target:,.2f}", f"+{tgt_pct:.2f}%")
+
+    st.markdown("### 📋 오늘 넣을 주문")
+    st.success(
+        f"### {ticker} **{first_qty:,.0f}주** 매수 — **MOC(종가 시장가)**\n\n"
+        f"약 **\\${first_cost:,.2f}** 어치입니다. "
+        f"**처음이라 보유한 게 없으니 팔 것도 없고**, 그래서 그냥 종가에 사면 됩니다."
+    )
+    st.markdown(
+        f"""
+**주문 넣고 나면 할 일**
+
+| 언제 | 뭘 |
+|---|---|
+| **내일부터** | 이 물량에 **LOC 매도 \\${first_target:.2f}** 를 걸어둡니다 (종가가 그 위면 자동으로 팔림) |
+| **{(date.today() + timedelta(days=int(stop_days * 1.45))).isoformat()} 무렵** | {stop_days}영업일째. 아직 안 팔렸으면 **MOC로 무조건 매도** |
+| **매일** | 판 게 없으면 또 시드의 {daily_pct*100:.1f}%만큼 삽니다 |
+
+**⏰ 주문 마감**: 미 동부 15:50 (한국시간 새벽 4:50, 서머타임 해제 시 5:50)까지.
+저녁에 미리 걸어두면 됩니다.
+
+**내일부터는** 시작일을 오늘({start_d})로 둔 채 이 화면을 열면
+그날그날 뭘 사고 팔지 알아서 계산해줍니다.
+"""
+    )
+    st.caption(
+        f"기준 종가: {px_date} \\${px:,.2f} · 실제 체결가는 오늘 종가라 조금 다를 수 있습니다. "
+        f"수량은 예산을 넘지 않게 내림했습니다."
+    )
+    with st.expander("📖 이 전략 규칙 한눈에 보기", expanded=True):
+        st.markdown(RULES_MD.format(
+            tgt=f"{tgt_pct:.2f}", stop=int(stop_days), splits=int(splits),
+            pct=f"{daily_pct*100:.1f}", ticker=ticker,
+        ))
     st.stop()
 
 for _note in res.flow_notes:
@@ -340,74 +497,86 @@ tab_home, tab_grid, tab_year, tab_help = st.tabs(
 
 # ============================================================ 오늘 할 일
 with tab_home:
-    hc1, hc2 = st.columns([1, 3])
-    with hc1:
-        use_price = st.number_input(
-            "오늘 예상 종가 ($)", 0.01, value=price, step=0.01, format="%.2f",
-            help="비워두면 마지막 종가로 계산합니다. 장중이면 현재가를 넣어보세요.",
-        )
-    with hc2:
-        st.caption(
-            f"마지막 반영 종가는 **{price_date}의 \\${price:,.2f}** 입니다. "
-            "아래는 그 다음 거래일(=오늘) 마감에 넣을 주문입니다."
-        )
+    st.caption(
+        f"마지막 반영 종가는 **{price_date}의 \\${price:,.2f}** 입니다. "
+        "아래는 **오늘 마감 전에 미리 걸어둘 주문**입니다. 오늘 종가를 몰라도 되게 만들어져 있습니다."
+    )
 
-    # 마지막 시뮬레이션 상태에서 이어서 '오늘' 계산
-    sells, orders = [], []
-    for lot in res.final_lots:
-        held = bdays(lot["buy_date"], date.today().isoformat())
-        if held >= int(stop_days):
-            sells.append({**lot, "held": held, "stop": True})
-        elif held >= 1 and use_price >= lot["target_price"]:
-            sells.append({**lot, "held": held, "stop": False})
-
-    sold_pnls = [(use_price - s["buy_price"]) * s["qty"] for s in sells]
-    mode = cfg.get("sell_day_buy_mode", "never")
-    will_buy = (not sells) or (
-        mode == "any_loss" and any(p < 0 for p in sold_pnls)
-    ) or (mode == "all_loss" and all(p < 0 for p in sold_pnls))
-
-    base = total if reinvest else seed
-    budget = min(base * daily_pct, cash) if will_buy else 0.0
-    fee = fee_pct / 100
-    buy_qty = int(budget * (1 - fee) / use_price) if (will_buy and budget > 0) else 0
-    buy_cost = buy_qty * use_price * (1 + fee)
+    # 오늘 종가를 모르는 상태에서 주문을 짠다 (원문 요령: 매수 LOC = 최저 목표가 - 0.01)
+    plan_cfg = {**cfg, "_last_close": price}
+    plan = order_plan(
+        res.final_lots, cash, (total if reinvest else put_in), plan_cfg, date.today().isoformat()
+    )
+    forced, pending, buy = plan["강제매도"], plan["목표매도"], plan["매수"]
 
     a1, a2 = st.columns(2)
     with a1:
-        st.markdown("### 🔴 팔 것")
-        if sells:
+        st.markdown("### 🔴 팔 주문")
+        if forced or pending:
             rows = []
-            for s in sells:
+            for s in forced:
                 rows.append({
-                    "매수일": s["buy_date"],
+                    "주문": "🛑 MOC 매도",
+                    "지정가": "— (무조건 체결)",
                     "수량": f"{s['qty']:,.0f}주",
+                    "매수일": s["buy_date"],
                     "매수가": f"${s['buy_price']:.2f}",
-                    "목표가": f"${s['target_price']:.2f}",
-                    "손익": f"{(use_price/s['buy_price']-1)*100:+.2f}%",
-                    "주문": "🛑 MOC 매도" if s["stop"] else f"🎯 LOC 매도 ${s['target_price']:.2f}",
-                    "사유": f"{s['held']}영업일 경과 (강제)" if s["stop"] else "목표 도달",
+                    "사유": f"{s['보유영업일']}영업일 경과 — 손절일",
+                })
+            for s in pending:
+                rows.append({
+                    "주문": "🎯 LOC 매도",
+                    "지정가": f"${s['target_price']:.2f}",
+                    "수량": f"{s['qty']:,.0f}주",
+                    "매수일": s["buy_date"],
+                    "매수가": f"${s['buy_price']:.2f}",
+                    "사유": f"{s['보유영업일']}일차 · 종가가 지정가 이상이면 체결",
                 })
             st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-            tot_q = sum(s["qty"] for s in sells)
-            st.error(f"**총 {tot_q:,.0f}주 매도** · 예상 손익 ${sum(sold_pnls):+,.2f}")
+            if forced:
+                st.error(
+                    f"**{sum(s['qty'] for s in forced):,.0f}주는 오늘 무조건 팔립니다** "
+                    f"(손절일 도래). 가격이 얼마든 팝니다."
+                )
+            if pending:
+                st.caption(
+                    f"LOC 매도 {len(pending)}건은 **종가가 지정가 이상일 때만** 체결됩니다. "
+                    "안 되면 그냥 미체결이고 내일 다시 겁니다."
+                )
         else:
-            st.success("**없음** — 목표가에 닿았거나 기한이 찬 건이 없습니다.")
+            st.success("**팔 주문 없음** — 어제 산 것뿐이라 아직 매도 대상이 아닙니다.")
 
     with a2:
-        st.markdown("### 🟢 살 것")
-        if will_buy and buy_qty > 0:
+        st.markdown("### 🟢 살 주문")
+        if buy["type"] == "LOC":
             st.info(
-                f"**{buy_qty:,.0f}주 매수** (MOC 시장가) · 약 **\\${buy_cost:,.2f}**\n\n"
-                f"체결되면 → 목표가 **\\${target_price_for(use_price, cfg):.2f}** 로 다음날부터 LOC 매도 걸기 · "
-                f"**{(date.today() + timedelta(days=int(stop_days*1.45))).isoformat()} 무렵** 까지 미달이면 강제 매도"
+                f"### {buy['qty']:,.0f}주 매수 — **LOC 지정가 \\${buy['limit']:.2f}**\n\n"
+                f"약 **\\${buy['cost']:,.2f}** · 지정가 = 위 목표가 중 최저 "
+                f"**\\${buy['limit'] + 0.01:.2f}** 에서 **−$0.01**"
             )
-            if base * daily_pct > cash + 1e-9:
-                st.warning(f"예수금 부족 — 목표 \\${base*daily_pct:,.0f} 중 \\${cash:,.0f}만 가능")
-        elif not will_buy:
-            st.error(f"**오늘은 사지 않음** — {SELL_DAY_MODES[mode]}")
+            st.caption(
+                "**왜 이렇게 거나** — 종가가 목표가에 닿으면 매도가 체결되면서 이 매수는 "
+                "지정가를 넘어 자동으로 미체결됩니다. 안 닿으면 매도 없이 매수만 됩니다. "
+                "**'판 날은 안 산다'는 규칙이 주문 하나로 지켜집니다.**"
+            )
+        elif buy["type"] == "MOC":
+            st.info(
+                f"### {buy['qty']:,.0f}주 매수 — **MOC 종가 시장가**\n\n"
+                f"약 **\\${buy['cost']:,.2f}** · {buy['reason']}"
+            )
         else:
-            st.error("**매수 불가** — 예수금이 부족합니다.")
+            st.error(f"### 오늘은 매수 없음\n\n{buy['reason']}")
+
+        if buy["type"]:
+            st.caption(
+                f"체결되면 → 목표가 **\\${target_price_for(buy['limit'] or price, cfg):.2f}** 로 "
+                f"내일부터 LOC 매도 · **{(date.today() + timedelta(days=int(stop_days*1.45))).isoformat()} "
+                f"무렵** 까지 미달이면 MOC 손절"
+            )
+        if plan["부족"] and buy["type"]:
+            st.warning(
+                f"예수금 부족 — 목표 \\${plan['목표금액']:,.0f} 중 \\${cash:,.0f}만 가능합니다."
+            )
 
     b1, b2 = st.columns([1.15, 1])
     with b1:
@@ -422,8 +591,8 @@ with tab_home:
                     "수량": round(lot["qty"]),
                     "매수가($)": round(lot["buy_price"], 2),
                     "목표가($)": round(lot["target_price"], 2),
-                    "현재손익(%)": round((use_price / lot["buy_price"] - 1) * 100, 2),
-                    "목표까지(%)": round((lot["target_price"] / use_price - 1) * 100, 2),
+                    "현재손익(%)": round((price / lot["buy_price"] - 1) * 100, 2),
+                    "목표까지(%)": round((lot["target_price"] / price - 1) * 100, 2),
                     "보유일": held,
                     "청산까지": "오늘!" if left <= 0 else f"{left}일",
                 })
@@ -626,37 +795,28 @@ with tab_help:
     h1, h2 = st.columns([1, 1])
 
     with h1:
-        st.markdown("### 📖 규칙 (이게 전부입니다)")
-        st.markdown(
-            f"""
-**매일 장 마감 무렵, 두 가지만 확인합니다.**
-
-**1) 팔 것** — 보유 중인 건마다
-- 오늘 종가가 **목표가(+{tgt_pct:.2f}%) 이상** → 🎯 판다
-- 산 지 **{stop_days}영업일** 경과 → 🛑 가격 상관없이 판다
-- 둘 다 아니면 그냥 들고 있는다
-
-**2) 살 것**
-- 오늘 판 게 있으면 → {SELL_DAY_MODES[cfg.get('sell_day_buy_mode','never')]}
-- 판 게 없으면 → **{'어제 마감 총자산' if reinvest else '시드'}의 {daily_pct*100:.1f}%** 만큼 산다
-
-**손절은 "얼마 떨어지면"이 아니라 "며칠 지나면"입니다.**
--30%가 나도 {stop_days}영업일 전엔 안 팔고, 그날이 오면 무조건 팝니다.
-
-**절대 하면 안 되는 것**
-- 목표가 왔는데 더 오를 것 같아서 안 팔기
-- 청산일인데 곧 오를 것 같아서 안 팔기
-- 무서워서 중간에 다 팔아버리기
-"""
-        )
-        st.markdown("### ❓ LOC / MOC")
+        st.markdown("## 📖 종사종팔 V5 — 처음이면 이것만 읽으세요")
+        st.markdown(RULES_MD.format(
+            tgt=f"{tgt_pct:.2f}", stop=int(stop_days), splits=int(splits),
+            pct=f"{daily_pct*100:.1f}", ticker=ticker,
+        ))
+        st.markdown("### ❓ LOC / MOC가 뭔가요")
         st.markdown(
             """
-- **MOC** (종가 시장가): 마감 종가에 **무조건 체결**. → 매수, 강제청산에 사용
-- **LOC** (종가 지정가): 종가가 지정가 **이상**일 때만 체결. → 목표 매도에 딱 맞음
+둘 다 **장 마감 종가에 체결**되는 주문입니다. 장중에 신경 쓸 필요가 없습니다.
 
-이 전략은 모든 매매를 종가로 가정해 검증했으므로 LOC/MOC를 쓰면 백테스트와 어긋나지 않습니다.
-증권사 앱에 'LOC'/'MOC' 또는 '종가지정가'/'종가시장가'가 있는지 확인하세요.
+| | 뜻 | 언제 체결되나 | 여기서 쓰는 곳 |
+|---|---|---|---|
+| **MOC** | 종가 시장가 | **무조건 체결** | 손절 매도, 팔 게 없는 날의 매수 |
+| **LOC** | 종가 지정가 | 조건 맞을 때만 | 목표 매도, 매도 가능성 있는 날의 매수 |
+
+**LOC 방향이 헷갈리면**
+- **LOC 매도**: 종가가 지정가 **이상**이면 체결 (비싸게 팔고 싶으니까)
+- **LOC 매수**: 종가가 지정가 **이하**면 체결 (싸게 사고 싶으니까)
+
+이 전략은 모든 매매를 종가로 가정해 검증했습니다. LOC/MOC를 쓰면 **백테스트와 실제 체결이 어긋나지 않습니다.**
+
+증권사 앱에 'LOC'/'MOC' 또는 '종가지정가'/'종가시장가'가 있는지 먼저 확인하세요. 없으면 이 전략은 실행이 어렵습니다.
 """
         )
 
