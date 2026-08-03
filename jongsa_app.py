@@ -139,13 +139,16 @@ def load_price_history(ticker: str, start: str, end: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def simulate(ticker, start, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode, reinvest, flows):
+def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode, reinvest, flows):
     """시작일부터 오늘까지 규칙대로 돌린다. 설정이 같으면 캐시에서 바로 나온다.
 
+    today를 인자로 받는 이유: 캐시 키에 날짜가 들어가야 날이 바뀌는 순간
+    무조건 다시 계산된다. 함수 안에서 date.today()를 부르면 캐시가 그대로
+    남아 어제 결과를 보여줄 수 있다.
     flows는 캐시 키가 되어야 하므로 튜플로 받는다.
     존버(그냥 사서 놔두기)도 같은 입출금 조건으로 같이 돌려서 비교한다.
     """
-    hist = load_price_history(ticker, start, date.today().isoformat())
+    hist = load_price_history(ticker, start, today)
     res = run_jongsa(
         hist, "V5",
         initial_cash=cash, target_return=tgt, daily_buy_pct=pct, stop_days=int(stop),
@@ -266,7 +269,8 @@ flow_tuples = tuple((str(f["날짜"]), float(f["금액"])) for f in st.session_s
 try:
     with st.spinner("계산 중..."):
         res, hist, bh_curve = simulate(
-            ticker, start_d.isoformat(), float(seed), daily_pct, tgt_pct / 100, int(stop_days),
+            ticker, start_d.isoformat(), date.today().isoformat(),
+            float(seed), daily_pct, tgt_pct / 100, int(stop_days),
             fee_pct / 100, cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
             cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
         )
@@ -558,13 +562,16 @@ with tab_year:
         tr["연도"] = pd.to_datetime(tr["매도일"]).dt.year
 
     rows = []
+    _years = sorted(set(eq.index.year))
     for yr, grp in eq.groupby(eq.index.year):
-        if len(grp) < 20:
+        if len(grp) < 5:  # 며칠뿐이면 의미가 없다. 그 이상이면 바로 줄을 만든다
             continue
         bh = close.loc[grp.index]
         yt = tr[tr["연도"] == yr] if not tr.empty else pd.DataFrame()
+        # 아직 안 끝난 해와 중간부터 시작한 해는 표시해준다
+        partial = "  (진행중)" if yr == _years[-1] else ("  (일부)" if yr == _years[0] and len(grp) < 200 else "")
         rows.append({
-            "연도": yr,
+            "연도": f"{yr}{partial}",
             "수익률(%)": round((grp.iloc[-1] / grp.iloc[0] - 1) * 100, 1),
             "연내 MDD(%)": round(((grp - grp.cummax()) / grp.cummax()).min() * 100, 1),
             "승률(%)": round((yt["손익"] > 0).mean() * 100, 1) if len(yt) else None,
@@ -588,13 +595,14 @@ with tab_year:
         if has_flows:
             st.caption("표의 연도별 수치는 입출금 효과를 뺀 값이고, 위 그래프는 실제 자산 금액입니다.")
 
-    if len(ydf) >= 3:
-        full = ydf.iloc[1:-1]
+    # 요약은 온전히 채워진 해만 쓴다 ('일부'·'진행중' 표시된 해 제외)
+    full = ydf[~ydf["연도"].astype(str).str.contains(r"\(")] if not ydf.empty else ydf
+    if len(full) >= 2:
         st.info(
             f"**온전한 {len(full)}개년 중 {int((full['수익률(%)'] > 0).sum())}년 플러스** · "
             f"평균 {full['수익률(%)'].mean():.1f}% · 최고 {full['수익률(%)'].max():.1f}% / "
             f"최저 {full['수익률(%)'].min():.1f}% · 연내 낙폭 평균 {full['연내 MDD(%)'].mean():.1f}% "
-            f"(최악 {full['연내 MDD(%)'].min():.1f}%) — 첫 해·마지막 해는 부분연도라 제외"
+            f"(최악 {full['연내 MDD(%)'].min():.1f}%) — **(일부)·(진행중)** 표시된 해는 제외했습니다"
         )
     _bhdd = ((bh_curve / bh_curve.cummax()) - 1).min() * 100
     st.caption(
