@@ -147,8 +147,8 @@ def run_jongsa(
     close = df["Close"].astype(float).values
     dates = df.index
     n = len(close)
-    if n < 2:
-        raise ValueError("거래일이 2일 미만입니다. 시작일을 며칠 앞으로 당기세요.")
+    if n < 1:
+        raise ValueError("해당 기간에 거래일이 없습니다.")
 
     cash = float(initial_cash)
     shares = 0.0

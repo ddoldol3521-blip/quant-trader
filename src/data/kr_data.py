@@ -51,6 +51,22 @@ def _yf_ohlcv(code: str, start: str, end: str) -> pd.DataFrame:
     raise ValueError(f"{code} 시세를 받지 못했습니다.")
 
 
+def _clip(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
+    """요청한 기간 밖의 날짜를 잘라낸다.
+
+    데이터 제공처가 시작일 앞뒤로 며칠을 더 얹어 주는 경우가 있다. 그대로 두면
+    '내가 시작하지도 않은 날'에 매수가 잡혀 결과가 통째로 어긋난다.
+    """
+    if df is None or df.empty:
+        return df
+    idx = pd.to_datetime(df.index)
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_localize(None)
+        df = df.copy()
+        df.index = idx
+    return df[(idx >= pd.Timestamp(start)) & (idx <= pd.Timestamp(end))]
+
+
 def get_kr_ohlcv(code: str, start: str, end: str) -> pd.DataFrame:
     """종목 하나의 일봉 OHLCV를 가져온다.
 
@@ -58,12 +74,12 @@ def get_kr_ohlcv(code: str, start: str, end: str) -> pd.DataFrame:
     """
     if fdr is not None:
         try:
-            df = fdr.DataReader(code, start, end)
+            df = _clip(fdr.DataReader(code, start, end), start, end)
             if df is not None and not df.empty:
                 return df
         except Exception:
             pass  # 아래 yfinance로 재시도
-    return _yf_ohlcv(code, start, end)
+    return _clip(_yf_ohlcv(code, start, end), start, end)
 
 
 def fetch_universe_data(universe: pd.DataFrame, start: str, end: str, show_progress: bool = True) -> dict:
