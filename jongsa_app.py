@@ -536,9 +536,12 @@ if ready:
     k[i].metric("누적 손익금", f"${profit:+,.0f}"); i += 1
     k[i].metric("누적 수익률", f"{res.net_return_pct:+.2f}%"); i += 1
     k[i].metric("남은 현금", f"${cash:,.0f}", f"{cash/total*100:.0f}%" if total else None); i += 1
+    # '현재가'가 아니라 바로 직전 거래일의 종가다. 라벨과 날짜를 명확히 한다.
     k[i].metric(
-        f"{ticker} 현재가", f"${price:,.2f}",
-        f"{(price/log.iloc[-2]['종가']-1)*100:+.2f}%" if len(log) > 1 else None,
+        f"{ticker} 전 거래일 종가", f"${price:,.2f}",
+        (f"{price_date:%m/%d} · 전일대비 {(price/log.iloc[-2]['종가']-1)*100:+.2f}%"
+         if len(log) > 1 else f"{price_date:%m/%d}"),
+        help="바로 직전 거래일의 종가입니다. 오늘 넣을 주문은 이 값을 기준으로 계산합니다.",
     ); i += 1
     k[i].metric("현재 보유", f"{shares:,.0f}주", f"${equity:,.0f} · {int(last['보유건수'])}건")
 
@@ -853,10 +856,12 @@ with tab_year:
     # '따로 돌려보는' 의미가 없어진다. 그래서 자체 딕셔너리에 저장한다.
     if "btcfg" not in st.session_state:
         st.session_state.btcfg = {
-            "ticker": cfg["ticker"], "start": "2011-01-03", "seed": 10000.0,
+            "ticker": cfg["ticker"], "start": "2011-01-03",
+            "end": date.today().isoformat(), "seed": 10000.0,
             "splits": 10, "tgt": 2.75, "stop": 10, "fee": 0.0, "reinvest": True,
         }
     bt = st.session_state.btcfg
+    bt.setdefault("end", date.today().isoformat())   # 예전 세션 대비
 
     with bt1:
         h1, h2 = st.columns([3, 1])
@@ -868,13 +873,14 @@ with tab_year:
         with h2:
             if st.button("📥 내 설정 복사해오기", width="stretch"):
                 st.session_state.btcfg = {
-                    "ticker": ticker, "start": start_d.isoformat(), "seed": float(seed),
+                    "ticker": ticker, "start": start_d.isoformat(),
+                    "end": date.today().isoformat(), "seed": float(seed),
                     "splits": int(splits), "tgt": float(tgt_pct), "stop": int(stop_days),
                     "fee": float(fee_pct), "reinvest": bool(reinvest),
                 }
                 st.rerun()
 
-        e1, e2, e3, e4 = st.columns(4)
+        e1, e2, e3 = st.columns([1, 1, 1])
         with e1:
             bt["ticker"] = st.text_input("종목", value=bt["ticker"], key="bt_tk").strip().upper()
         with e2:
@@ -885,26 +891,37 @@ with tab_year:
             )
             bt["start"] = _b.isoformat()
         with e3:
+            _e = st.date_input(
+                "종료일", value=pd.Timestamp(bt["end"]).date(),
+                min_value=date(2010, 3, 12), max_value=date.today(), key="bt_ed",
+                help="과거 특정 구간만 잘라서 보고 싶을 때 씁니다. 기본값은 오늘입니다.",
+            )
+            bt["end"] = _e.isoformat()
+
+        e4, e5, e6, e7, e8 = st.columns(5)
+        with e4:
             bt["seed"] = st.number_input("시드 ($)", 100.0, value=float(bt["seed"]),
                                          step=1000.0, key="bt_sd")
-        with e4:
-            bt["splits"] = st.number_input("분할수", 2, 60, int(bt["splits"]), key="bt_sp")
-
-        e5, e6, e7, e8 = st.columns(4)
         with e5:
+            bt["splits"] = st.number_input("분할수", 2, 60, int(bt["splits"]), key="bt_sp")
+        with e6:
             bt["tgt"] = st.number_input("목표수익률 (%)", 0.5, 20.0, float(bt["tgt"]),
                                         0.05, key="bt_tg")
-        with e6:
-            bt["stop"] = st.number_input("청산 영업일", 2, 60, int(bt["stop"]), key="bt_sv")
         with e7:
+            bt["stop"] = st.number_input("청산 영업일", 2, 60, int(bt["stop"]), key="bt_sv")
+        with e8:
             bt["fee"] = st.number_input("수수료 (%)", 0.0, 1.0, float(bt["fee"]), 0.001,
                                         format="%.4f", key="bt_fe")
-        with e8:
-            bt["reinvest"] = st.radio(
-                "수익 재투자", [True, False], index=0 if bt["reinvest"] else 1,
-                format_func=lambda v: "⭕ 복리" if v else "❌ 고정",
-                horizontal=True, key="bt_re",
-            )
+
+        bt["reinvest"] = st.radio(
+            "수익 재투자", [True, False], index=0 if bt["reinvest"] else 1,
+            format_func=lambda v: "⭕ 함 (복리)" if v else "❌ 안 함 (고정)",
+            horizontal=True, key="bt_re",
+        )
+
+        if pd.Timestamp(bt["end"]) <= pd.Timestamp(bt["start"]):
+            st.error("**종료일이 시작일보다 빠릅니다.** 날짜를 다시 잡아주세요.")
+            st.stop()
 
         # 내 설정과 어디가 다른지 한눈에
         diffs = []
@@ -912,6 +929,8 @@ with tab_year:
             diffs.append(f"종목 {ticker} → {bt['ticker']}")
         if bt["start"] != start_d.isoformat():
             diffs.append(f"시작일 {start_d} → {bt['start']}")
+        if bt["end"] != date.today().isoformat():
+            diffs.append(f"종료일 오늘 → {bt['end']}")
         if abs(bt["seed"] - seed) > 1e-9:
             diffs.append(f"시드 ${seed:,.0f} → ${bt['seed']:,.0f}")
         if int(bt["splits"]) != int(splits):
@@ -931,13 +950,13 @@ with tab_year:
         try:
             with st.spinner("돌리는 중..."):
                 br, bh_, bbh = simulate(
-                    bt["ticker"], bt["start"], date.today().isoformat(), float(bt["seed"]),
+                    bt["ticker"], bt["start"], bt["end"], float(bt["seed"]),
                     1 / int(bt["splits"]), bt["tgt"] / 100, int(bt["stop"]), bt["fee"] / 100,
                     cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
                     cfg.get("sell_day_buy_mode", "never"), bool(bt["reinvest"]), (),
                 )
         except Exception as ex:
-            st.error(f"백테스트 실패: {ex}  — 종목코드와 시작일을 확인하세요.")
+            st.error(f"백테스트 실패: {ex}  — 종목코드와 기간을 확인하세요.")
         else:
             st.divider()
             show_result(
