@@ -81,6 +81,26 @@ def _metrics(equity: pd.Series, initial_cash: float, n_days: int) -> tuple:
     return cagr, float(dd.min()) * 100, dd
 
 
+def clean_prices(df: pd.DataFrame) -> pd.DataFrame:
+    """계산에 넣기 전에 종가가 성한 줄만 남긴다.
+
+    시세 제공처가 값이 비어 있는(NaN) 줄을 섞어 보내는 일이 있다. 그대로 두면
+    수량 = 예산 / 종가 가 NaN이 되고, 정수주로 바꾸는 int()에서
+    'cannot convert float NaN to integer'로 엉뚱하게 터진다.
+    실제로 배포 환경에서 이 오류가 났다. 데이터를 어디서 받아왔든 여기서 막는다.
+    """
+    if df is None or len(df) == 0:
+        raise ValueError("시세 데이터가 비어 있습니다.")
+    if "Close" not in df.columns:
+        raise ValueError("시세에 종가(Close) 항목이 없습니다.")
+    close = pd.to_numeric(df["Close"], errors="coerce")
+    good = np.isfinite(close.to_numpy(dtype="float64", na_value=np.nan)) & (close > 0)
+    out = df[good]
+    if len(out) == 0:
+        raise ValueError("쓸 수 있는 종가가 하나도 없습니다.")
+    return out
+
+
 def _resolve_flows(cash_flows, dates) -> tuple:
     """입출금 (날짜, 금액) 목록을 거래일 인덱스별 금액 배열로 바꾼다.
 
@@ -144,6 +164,7 @@ def run_jongsa(
         출금액이 예수금보다 크면 규칙을 어기고 강제 매도하지 않고,
         가능한 만큼만 빼고 나머지는 예수금이 생길 때까지 이월한다.
     """
+    df = clean_prices(df)
     close = df["Close"].astype(float).values
     dates = df.index
     n = len(close)
@@ -321,6 +342,8 @@ def run_jongsa(
                     cash_exhausted += 1
                 # 원본 스프레드시트 방식: 수량 = 예산*(1-수수료)/종가, 매수비용 = 종가*수량*(1+수수료)
                 qty = buy_amount * (1 - fee_rate) / price
+                if not np.isfinite(qty) or qty < 0:
+                    qty = 0.0
                 if whole_shares:
                     qty = float(int(qty))
                 if qty > 0:
@@ -464,6 +487,7 @@ def run_buy_and_hold(
     같은 조건에서 비교해야 의미가 있으므로 입출금도 똑같이 반영한다.
     입금하면 그날 종가로 더 사고, 출금하면 그날 종가로 그만큼 판다.
     """
+    df = clean_prices(df)
     close = df["Close"].astype(float).values
     dates = df.index
     n = len(close)
@@ -490,6 +514,8 @@ def run_buy_and_hold(
 
         if cash > 0:  # 남은 현금은 전부 주식으로 (존버니까)
             qty = cash * (1 - fee_rate) / price
+            if not np.isfinite(qty) or qty < 0:
+                qty = 0.0
             if whole_shares:
                 qty = float(int(qty))
             if qty > 0:
