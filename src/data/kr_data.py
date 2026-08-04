@@ -52,19 +52,25 @@ def _yf_ohlcv(code: str, start: str, end: str) -> pd.DataFrame:
 
 
 def _clip(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
-    """요청한 기간 밖의 날짜를 잘라낸다.
+    """요청한 기간 밖의 날짜를 잘라내고, 종가가 비어 있는 줄을 버린다.
 
-    데이터 제공처가 시작일 앞뒤로 며칠을 더 얹어 주는 경우가 있다. 그대로 두면
-    '내가 시작하지도 않은 날'에 매수가 잡혀 결과가 통째로 어긋난다.
+    - 데이터 제공처가 시작일 앞뒤로 며칠을 더 얹어 주는 경우가 있다. 그대로 두면
+      '내가 시작하지도 않은 날'에 매수가 잡혀 결과가 통째로 어긋난다.
+    - 종가가 NaN인 줄이 섞여 들어오기도 한다. 그대로 계산에 넣으면 수량이
+      nan/inf가 되어 엉뚱한 곳에서 터진다.
     """
-    if df is None or df.empty:
+    if df is None or len(df) == 0:
         return df
+    df = df.copy()
     idx = pd.to_datetime(df.index)
     if getattr(idx, "tz", None) is not None:
         idx = idx.tz_localize(None)
-        df = df.copy()
-        df.index = idx
-    return df[(idx >= pd.Timestamp(start)) & (idx <= pd.Timestamp(end))]
+    df.index = idx
+    df = df[(idx >= pd.Timestamp(start)) & (idx <= pd.Timestamp(end))]
+    if "Close" in df.columns:
+        close = pd.to_numeric(df["Close"], errors="coerce")
+        df = df[close.notna() & (close > 0)]
+    return df
 
 
 def get_kr_ohlcv(code: str, start: str, end: str) -> pd.DataFrame:

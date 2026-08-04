@@ -413,28 +413,40 @@ with tab_home:
                 cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
             )
     except Exception as e:
-        # 시작일이 너무 최근이라 돌릴 게 없는 것인지, 종목 자체가 잘못된 것인지 가른다.
-        # 최근 시세가 받아지면 종목은 멀쩡한 것이므로 '이제 막 시작' 상태로 본다.
+        ready = False   # 아래 탭들이 쓸 계산 결과가 없다는 뜻
+
+        # 시작일이 정말 최근이라 돌릴 게 없는 것과, 시세를 못 받은 것은 다른 문제다.
+        # 예전에는 둘을 구분하지 않아서, 시세를 못 받았는데도 '오늘부터
+        # 시작하시는군요'가 뜨고 그 뒤에서 엉뚱하게 터졌다.
+        too_recent = (date.today() - start_d).days <= 21
+
         try:
             recent = load_price_history(
                 ticker, (date.today() - timedelta(days=40)).isoformat(), date.today().isoformat()
             )
         except Exception:
             recent = None
+        if recent is not None and len(recent) == 0:
+            recent = None
 
-        ready = False   # 아래 탭들이 쓸 계산 결과가 없다는 뜻
-
-        if recent is None or recent.empty:
+        if not too_recent:
             st.error(
-                f"**{ticker} 시세를 못 받았습니다.** 종목코드를 확인해주세요. "
-                f"(미국 종목은 티커, 한국 종목은 6자리 숫자)\n\n원인: {e}"
+                f"**시세를 받아오지 못했습니다.**\n\n"
+                f"시작일({start_d})은 충분히 과거인데 계산할 데이터가 없습니다. "
+                f"종목코드가 맞는지 확인해보시고, 맞다면 시세 서버가 잠시 막힌 것이니 "
+                f"1~2분 뒤 새로고침해보세요.\n\n원인: `{e}`"
             )
             recent = None
+        elif recent is None:
+            st.error(
+                f"**{ticker} 시세를 못 받았습니다.** 종목코드를 확인해주세요. "
+                f"(미국 종목은 티커, 한국 종목은 6자리 숫자)\n\n원인: `{e}`"
+            )
 
     # ---------- 오늘부터 시작하는 경우 ----------
     # 지나간 날이 없으니 백테스트는 못 하지만, '오늘 얼마 사면 되는지'는 알려줄 수 있다.
     if not ready and recent is not None:
-        px = float(recent["Close"].iloc[-1])
+        px = float(pd.to_numeric(recent["Close"], errors="coerce").dropna().iloc[-1])
         px_date = recent.index[-1].date()
         st.info(
             f"**{start_d}부터 시작하시는군요.** 아직 지나간 날이 없어서 성적표는 없습니다. "
@@ -449,8 +461,8 @@ with tab_home:
         _rng = cfg.get("buy_range_pct", 0.10)
         _limit = round(px * (1 + _rng), 2)
         first_budget = seed * daily_pct
-        first_qty = int(first_budget * (1 - fee_pct / 100) / px) if cfg.get("whole_shares", True) \
-            else first_budget * (1 - fee_pct / 100) / px
+        _raw_qty = first_budget * (1 - fee_pct / 100) / px
+        first_qty = int(_raw_qty) if cfg.get("whole_shares", True) else _raw_qty
         first_cost = first_qty * px * (1 + fee_pct / 100)
 
         f1, f2, f3, f4 = st.columns(4)
