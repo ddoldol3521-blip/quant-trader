@@ -50,6 +50,7 @@ class JongsaResult:
     max_open_lots: int = 0
     avg_open_lots: float = 0.0
     cash_exhausted_days: int = 0
+    buy_range_skips: int = 0   # 매수 범위를 넘겨 매수를 건너뛴 날 수
     final_value: float = 0.0
     # ----- 중간 입출금 관련 -----
     # 입출금이 있으면 '총자산 / 시드 - 1'은 수익률이 아니게 된다.
@@ -144,6 +145,7 @@ def run_jongsa(
     whole_shares: bool = False,
     v4_mode: str = "rolling_replace",
     loc_buy_limit: bool = False,
+    buy_range_pct: float = None,
     season_reseed: bool = False,
     fee_in_target: bool = False,
     sell_day_buy_mode: str = "never",
@@ -186,6 +188,7 @@ def run_jongsa(
     season_seed = base_daily_amount
     realized_pnl = np.zeros(n)  # 그날 실현손익 (V4 복리 계산용)
     cash_exhausted = 0
+    range_skips = 0   # 매수 범위를 넘겨 그냥 지나간 날
 
     prev_total_assets = float(initial_cash)
 
@@ -233,6 +236,14 @@ def run_jongsa(
                     f"예수금이 모자라 미뤘습니다 (보유분을 강제로 팔지 않습니다)."
                 )
         applied_flows[t] = flow_today
+
+        # 오늘 '매도 주문을 걸 수 있는' 물량이 있었는지.
+        # 있으면 매수 지정가를 (최저 목표가 - 0.01)로 걸게 되고, 그건 곧
+        # '매도가 체결되면 매수는 미체결'이라 아래 did_sell 판정과 같아진다.
+        # 없으면 그 장치를 못 쓰니 '매수 범위'라는 상한을 대신 건다.
+        had_sell_candidates = any(
+            (t - lot.buy_day_idx) >= 1 for lot in open_lots
+        )
 
         # ---------- 1) 매도 판정 ----------
         did_sell = False
@@ -296,6 +307,18 @@ def run_jongsa(
             order_limit = close[t - 1] * (1 + target_return)
             if price > order_limit:
                 buy_today = False
+
+        # 매수 범위: 팔 물량이 아예 없던 날은 '(최저 목표가 - 0.01)' 장치를 쓸 수
+        # 없다. 대신 '어제 종가 x (1 + 매수 범위)'를 상한으로 걸고, 그보다 높게
+        # 마감하면 사지 않는다. 어제보다 크게 튄 날은 비싸니 건너뛰겠다는 뜻이다.
+        # (팔 물량이 있던 날은 위 did_sell 판정이 이미 같은 역할을 한다)
+        buy_range_skipped = False
+        if (buy_today and buy_range_pct is not None and t > 0
+                and not had_sell_candidates):
+            if price > close[t - 1] * (1 + buy_range_pct):
+                buy_today = False
+                buy_range_skipped = True
+                range_skips += 1
 
         # 시즌 리시드: 보유 물량이 전부 청산되면 다음 매수부터 시드를 다시 계산한다
         # (구글시트에서 '1회 시드'가 시즌마다 갱신되는 것을 반영)
@@ -465,6 +488,7 @@ def run_jongsa(
         max_open_lots=int(open_lot_counts.max()),
         avg_open_lots=float(open_lot_counts.mean()),
         cash_exhausted_days=cash_exhausted,
+        buy_range_skips=range_skips,
         final_value=float(equity_s.iloc[-1]),
         twr_curve=twr_s,
         contributed_curve=contributed_s,

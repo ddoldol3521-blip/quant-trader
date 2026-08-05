@@ -16,7 +16,7 @@ import streamlit as st
 
 from src.data.kr_data import get_kr_ohlcv
 from src.jongsa_backtest import run_buy_and_hold, run_jongsa
-from src.jongsa_live import BUY_RANGE_MISS_RATE, PRESETS, SELL_DAY_MODES
+from src.jongsa_live import BUY_RANGE_SKIPS_15Y, BUY_RANGE_VS_NOLIMIT, PRESETS, SELL_DAY_MODES
 from src.jongsa_live import business_days_between as bdays
 from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
 from src.jongsa_live import order_plan, target_price_for
@@ -264,7 +264,8 @@ def load_price_history(ticker: str, start: str, end: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode, reinvest, flows):
+def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode,
+             reinvest, flows, buy_range=None):
     """시작일부터 오늘까지 규칙대로 돌린다. 설정이 같으면 캐시에서 바로 나온다.
 
     today를 인자로 받는 이유: 캐시 키에 날짜가 들어가야 날이 바뀌는 순간
@@ -279,6 +280,7 @@ def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole,
         initial_cash=cash, target_return=tgt, daily_buy_pct=pct, stop_days=int(stop),
         fee_rate=fee, whole_shares=whole, fee_in_target=fee_in_tgt,
         sell_day_buy_mode=mode, reinvest=reinvest, cash_flows=list(flows),
+        buy_range_pct=buy_range,
     )
     bh = run_buy_and_hold(
         hist, initial_cash=cash, fee_rate=fee, whole_shares=whole, cash_flows=list(flows)
@@ -411,6 +413,7 @@ with tab_home:
                 float(seed), daily_pct, tgt_pct / 100, int(stop_days),
                 fee_pct / 100, cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
                 cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
+                cfg.get("buy_range_pct", 0.10),
             )
     except Exception as e:
         ready = False   # 아래 탭들이 쓸 계산 결과가 없다는 뜻
@@ -635,8 +638,9 @@ if ready:
             st.caption(
                 f"**매수 범위란** — 어제 종가보다 {_rng*100:.0f}% 넘게 오른 날은 사지 않겠다는 뜻입니다. "
                 f"그 안에서 마감하면 **종가에** 체결됩니다 (지정가에 사는 게 아닙니다). "
-                f"과거 SOXL 기준 하루에 +{_rng*100:.0f}% 넘긴 날은 "
-                f"{BUY_RANGE_MISS_RATE.get(round(_rng, 2), 0):.2f}%였습니다."
+                + (f"과거 SOXL 15년(3,919거래일)에서 이 설정으로 건너뛴 날은 "
+                   f"**{BUY_RANGE_SKIPS_15Y[round(_rng, 2)]}일**뿐이었습니다."
+                   if round(_rng, 2) in BUY_RANGE_SKIPS_15Y else "")
             )
         else:
             st.error(f"### 오늘은 매수 없음\n\n{buy['reason']}")
@@ -954,6 +958,7 @@ with tab_year:
                     1 / int(bt["splits"]), bt["tgt"] / 100, int(bt["stop"]), bt["fee"] / 100,
                     cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
                     cfg.get("sell_day_buy_mode", "never"), bool(bt["reinvest"]), (),
+                    bt.get("range", cfg.get("buy_range_pct", 0.10)),
                 )
         except Exception as ex:
             st.error(f"백테스트 실패: {ex}  — 종목코드와 기간을 확인하세요.")
@@ -1050,13 +1055,29 @@ with tab_help:
             "매수 범위 (%)", 3, 30, int(round(cfg.get("buy_range_pct", 0.10) * 100)),
             help="팔 물량이 없는 날 LOC 매수를 어제 종가보다 몇 % 위에 걸지. 그보다 더 오르면 안 삽니다.",
         )
-        _miss = BUY_RANGE_MISS_RATE.get(round(br / 100, 2))
-        st.caption(
-            f"어제 종가보다 **{br}% 넘게 오른 날은 사지 않습니다.** "
-            + (f"과거 SOXL에서 그런 날은 전체의 **{_miss:.2f}%** 였습니다. " if _miss else "")
-            + "카페에서는 **+5~10%** 를 씁니다. **매수 안 되는 게 손해는 아닙니다** — "
-            "그만큼 급등한 날은 안 사는 게 이 설정의 취지입니다."
-        )
+        st.caption(f"어제 종가보다 **{br}% 넘게 오른 날은 사지 않습니다.** 카페에서는 +5~10%를 씁니다.")
+        _k = round(br / 100, 2)
+        if _k in BUY_RANGE_SKIPS_15Y:
+            _sk, _vs = BUY_RANGE_SKIPS_15Y[_k], BUY_RANGE_VS_NOLIMIT[_k]
+            st.caption(
+                f"**SOXL 15년(3,919거래일) 백테스트** — 이 설정으로 건너뛴 날 **{_sk}일**, "
+                f"제한을 아예 안 뒀을 때 대비 최종자산 **{_vs:+.1f}%**"
+            )
+        with st.expander("📊 매수 범위별 성적 (SOXL 2011~2026)"):
+            st.dataframe(
+                pd.DataFrame([
+                    {"매수 범위": ("제한 없음" if k >= 0.20 and k != 0.20 else f"+{int(k*100)}%"),
+                     "건너뛴 날": f"{BUY_RANGE_SKIPS_15Y[k]}일",
+                     "제한없음 대비": f"{BUY_RANGE_VS_NOLIMIT[k]:+.1f}%"}
+                    for k in (0.03, 0.05, 0.07, 0.10, 0.15, 0.20)
+                ]), width="stretch", hide_index=True,
+            )
+            st.caption(
+                "**+10%가 사실상 손해가 없습니다** (15년에 11일 건너뛰고 −0%). "
+                "**+5% 이하로 조이면 불리해집니다** — 급등 직후 재진입을 자주 놓쳐서 "
+                "15년 기준 −7.6%, 상승장(2023~)만 보면 −12.6%까지 벌어졌습니다. "
+                "반대로 +20% 이상은 사실상 제한이 없는 것과 같습니다."
+            )
 
         moc = st.checkbox(
             "내 증권사에 **MOC(종가 시장가)**가 있다", cfg.get("moc_available", True),
