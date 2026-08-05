@@ -1,0 +1,46 @@
+name: 종사종팔 일일 알림
+
+# 한국시간 저녁 9시(=UTC 12:00), 평일에만.
+# 미국장은 한국 새벽 5~6시에 마감하므로 저녁이면 어제 종가가 확정돼 있고,
+# 주문 마감(한국 새벽 4:50)까지는 아직 여유가 있다.
+#
+# GitHub Actions의 cron은 UTC 기준이다. 부하가 몰리는 정시에는 몇 분에서
+# 십여 분 밀릴 수 있는데, 이 알림은 그 정도 지연이 문제되지 않는다.
+on:
+  schedule:
+    - cron: "0 12 * * 1-5"
+  workflow_dispatch:        # 필요할 때 손으로도 돌릴 수 있게
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 패키지 설치
+        # 알림에는 웹앱(streamlit)·차트(matplotlib/plotly)가 필요 없다.
+        run: pip install finance-datareader==0.9.202 yfinance==1.5.2 pandas==2.3.3 numpy==2.5.1 requests==2.34.2
+
+      - name: 알림 보내기
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # 시드와 시작일은 내 자산 규모가 드러나므로 Secrets에 둔다
+          JONGSA_SEED: ${{ secrets.JONGSA_SEED }}
+          JONGSA_START: ${{ secrets.JONGSA_START }}
+          # 아래는 전략 설정이라 공개돼도 상관없다. 바꾸려면 이 값을 고치면 된다.
+          JONGSA_TICKER: SOXL
+          JONGSA_SPLITS: "10"
+          JONGSA_TARGET: "2.75"
+          JONGSA_STOP: "10"
+          JONGSA_FEE: "0"
+          JONGSA_RANGE: "10"
+          # 앱 주소도 Secrets에 둔다 — 이 저장소가 공개라 여기 적으면
+          # '링크 아는 사람만' 이라는 공개 설정이 의미가 없어진다.
+          JONGSA_APP_URL: ${{ secrets.JONGSA_APP_URL }}
+        run: python scripts/jongsa_daily_notify.py
