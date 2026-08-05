@@ -802,6 +802,8 @@ def show_result(r, h, bh, tk, put, label):
     st.caption(
         f"{label} · 매매 {r.num_trades}회 (익절 {r.num_target_sells} / 손절 {r.num_forced_sells})"
         f" · 승률 {r.win_rate_pct:.1f}% · 평균 주식비중 {r.avg_exposure_pct:.0f}%"
+        + (f" · **매수 범위를 넘겨 건너뛴 날 {r.buy_range_skips}일**"
+           if r.buy_range_skips else " · 매수 범위 때문에 건너뛴 날 없음")
     )
 
     ydf = year_table(r.twr_curve, h["Close"], r.trades, tk)
@@ -863,9 +865,11 @@ with tab_year:
             "ticker": cfg["ticker"], "start": "2011-01-03",
             "end": date.today().isoformat(), "seed": 10000.0,
             "splits": 10, "tgt": 2.75, "stop": 10, "fee": 0.0, "reinvest": True,
+            "range": cfg.get("buy_range_pct", 0.10) * 100,
         }
     bt = st.session_state.btcfg
     bt.setdefault("end", date.today().isoformat())   # 예전 세션 대비
+    bt.setdefault("range", cfg.get("buy_range_pct", 0.10) * 100)
 
     with bt1:
         h1, h2 = st.columns([3, 1])
@@ -881,6 +885,7 @@ with tab_year:
                     "end": date.today().isoformat(), "seed": float(seed),
                     "splits": int(splits), "tgt": float(tgt_pct), "stop": int(stop_days),
                     "fee": float(fee_pct), "reinvest": bool(reinvest),
+                    "range": cfg.get("buy_range_pct", 0.10) * 100,
                 }
                 st.rerun()
 
@@ -902,7 +907,7 @@ with tab_year:
             )
             bt["end"] = _e.isoformat()
 
-        e4, e5, e6, e7, e8 = st.columns(5)
+        e4, e5, e6, e7, e8, e9 = st.columns(6)
         with e4:
             bt["seed"] = st.number_input("시드 ($)", 100.0, value=float(bt["seed"]),
                                          step=1000.0, key="bt_sd")
@@ -916,6 +921,11 @@ with tab_year:
         with e8:
             bt["fee"] = st.number_input("수수료 (%)", 0.0, 1.0, float(bt["fee"]), 0.001,
                                         format="%.4f", key="bt_fe")
+        with e9:
+            bt["range"] = st.number_input(
+                "매수 범위 (%)", 3.0, 30.0, float(bt["range"]), 1.0, key="bt_rg",
+                help="팔 물량이 없는 날, 어제 종가보다 이만큼 넘게 오르면 사지 않습니다.",
+            )
 
         bt["reinvest"] = st.radio(
             "수익 재투자", [True, False], index=0 if bt["reinvest"] else 1,
@@ -945,6 +955,8 @@ with tab_year:
             diffs.append(f"청산 {stop_days}일 → {int(bt['stop'])}일")
         if bool(bt["reinvest"]) != bool(reinvest):
             diffs.append(f"재투자 {'O' if reinvest else 'X'} → {'O' if bt['reinvest'] else 'X'}")
+        if abs(bt["range"] / 100 - cfg.get("buy_range_pct", 0.10)) > 1e-9:
+            diffs.append(f"매수 범위 {cfg.get('buy_range_pct', 0.10)*100:.0f}% → {bt['range']:.0f}%")
 
         if diffs:
             st.caption("**내 설정과 다른 점** — " + " · ".join(diffs))
@@ -958,7 +970,7 @@ with tab_year:
                     1 / int(bt["splits"]), bt["tgt"] / 100, int(bt["stop"]), bt["fee"] / 100,
                     cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
                     cfg.get("sell_day_buy_mode", "never"), bool(bt["reinvest"]), (),
-                    bt.get("range", cfg.get("buy_range_pct", 0.10)),
+                    bt["range"] / 100,
                 )
         except Exception as ex:
             st.error(f"백테스트 실패: {ex}  — 종목코드와 기간을 확인하세요.")
