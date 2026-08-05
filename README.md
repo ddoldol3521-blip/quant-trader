@@ -181,19 +181,22 @@ run_jongsa.bat               '종사종팔 V5' 바로가기가 실행하는 파�
 
 알림은 두 종류이고 서로 무관합니다.
 
-### 1. 종사종팔 매일 알림 (권장)
+### 1. 종사종팔 매일 알림
 
 **[TELEGRAM.md](TELEGRAM.md)** 에 단계별 안내가 있습니다.
 
-매일 한국시간 저녁 9시에 **어젯밤 마감 결과 + 오늘 넣을 주문**을 한 통으로 보냅니다.
+매 평일 정해진 시각에 **어젯밤 마감 결과 + 오늘 넣을 주문**을 한 통으로 보냅니다.
 손절일이 3영업일 안으로 다가온 물량도 미리 알려줍니다 — 목표 매도는 주문만 걸어두면 알아서 체결되지만, 손절은 날짜를 직접 세야 해서 제일 놓치기 쉽습니다.
 
-GitHub Actions(`.github/workflows/jongsa-daily.yml`)가 돌리므로 **PC를 꺼놔도 옵니다.**
-토큰·시드·시작일·앱 주소는 저장소가 공개여도 안 보이도록 GitHub Secrets에서 읽습니다.
+설정하는 곳은 종사종팔 앱의 **`🔔 알림` 탭**입니다. 봇 토큰을 넣고 chat_id를 찾은 뒤 예약을 켜면, 윈도우 작업 스케줄러(`JongsaDailyNotify`)가 매 평일 실행합니다. 이 PC가 켜져 있어야 합니다.
+
+PC를 꺼놔도 받고 싶다면 GitHub Actions(`.github/workflows/jongsa-daily.yml`)로 돌릴 수 있습니다. 저장소가 공개라 토큰·시드·시작일·앱 주소는 GitHub Secrets에서 읽습니다.
+
+메시지를 만드는 코드는 `src/jongsa_notify.py` 하나뿐이라, 앱의 미리보기와 실제 발송 내용이 어긋나지 않습니다.
 
 ```powershell
 # 보내지 않고 화면에만 미리보기
-$env:JONGSA_DRY_RUN="1"; $env:JONGSA_START="2026-08-03"; $env:JONGSA_SEED="20000"; .venv\Scripts\python.exe scripts\jongsa_daily_notify.py
+$env:JONGSA_DRY_RUN="1"; .venv\Scripts\python.exe scripts\jongsa_daily_notify.py
 ```
 
 ### 2. 종목 스캔 알림 (app.py 쪽)

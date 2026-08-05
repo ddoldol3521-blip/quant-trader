@@ -7,6 +7,7 @@
 
 import sys
 from datetime import date, datetime, timedelta
+from datetime import time as dtime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -20,6 +21,10 @@ from src.jongsa_live import BUY_RANGE_SKIPS_15Y, BUY_RANGE_VS_NOLIMIT, PRESETS, 
 from src.jongsa_live import business_days_between as bdays
 from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
 from src.jongsa_live import order_plan, target_price_for
+from src.jongsa_notify import build_message, send_now
+from src.scheduler import (JONGSA_TASK_NAME, get_jongsa_task_status, load_jongsa_notify_config,
+                           register_jongsa_task, remove_jongsa_task, save_jongsa_notify_config)
+from src.telegram_notify import find_chat_id, load_telegram_config, save_telegram_config
 
 st.set_page_config(page_title="종사종팔 V5", page_icon="🔁", layout="wide")
 
@@ -296,8 +301,8 @@ if is_shared_server():
         "이 설정 그대로 뜹니다 (주소창을 보면 설정값이 붙어 있습니다)."
     )
 
-tab_home, tab_grid, tab_year, tab_help = st.tabs(
-    ["📅 오늘 할 일 (주문 시트)", "📋 일별 기록", "📊 백테스트", "📖 규칙 · 설정"]
+tab_home, tab_grid, tab_year, tab_help, tab_notify = st.tabs(
+    ["📅 오늘 할 일 (주문 시트)", "📋 일별 기록", "📊 백테스트", "📖 규칙 · 설정", "🔔 알림"]
 )
 
 # ============================================================ 오늘 할 일
@@ -1128,4 +1133,155 @@ with tab_help:
             "**기록을 따로 안 남기는 이유** — 시작일과 규칙이 정해지면 그날부터 오늘까지의 "
             "모든 매매가 자동으로 결정됩니다. 그래서 매번 처음부터 다시 계산합니다. "
             "규칙을 어긴 매매가 있었다면 실제 잔고와 달라집니다."
+        )
+
+# ============================================================ 알림
+with tab_notify:
+    st.markdown("### 🔔 매일 텔레그램으로 받기")
+    st.caption(
+        "매 평일 정해진 시각에 **어젯밤 마감 결과 + 오늘 넣을 주문**을 한 통으로 보냅니다. "
+        "손절일이 3영업일 안으로 다가온 물량도 미리 알려줍니다 — 목표 매도는 주문만 걸어두면 "
+        "알아서 체결되지만, 손절은 날짜를 직접 세야 해서 제일 놓치기 쉽습니다."
+    )
+
+if is_shared_server():
+    with tab_notify:
+        st.info(
+            "**여기는 여러 사람이 함께 쓰는 서버라 알림을 설정할 수 없습니다.** "
+            "봇 토큰을 저장하면 다른 접속자와 섞이고, 예약도 이 서버에서는 걸리지 않습니다.\n\n"
+            "알림은 **내 PC에서 켠 앱**에서 설정하세요."
+        )
+else:
+    with tab_notify:
+        # 계산이 실패해도(ready=False) 이 탭은 열어둔다. 봇 연결은 시세와
+        # 무관하고, 메시지 만들기는 아래에서 따로 예외를 잡는다.
+        # 저장된 값이 있으면 채워서 보여준다. 없어도 에러는 아니다.
+        try:
+            saved_token, saved_chat = load_telegram_config()
+        except (FileNotFoundError, ValueError):
+            saved_token, saved_chat = "", ""
+        nt = load_jongsa_notify_config()
+
+        # ---------------------------------------------- 1단계: 봇 연결
+        st.markdown("#### 1단계 — 봇 연결")
+        with st.expander("봇을 아직 안 만들었다면 (5분)"):
+            st.markdown(
+                "1. 텔레그램에서 **@BotFather** 를 찾습니다 (파란 체크 ✔ 붙은 계정).\n"
+                "2. `/newbot` 을 보냅니다.\n"
+                "3. 봇 이름은 아무거나. 아이디는 **끝이 `bot`** 이어야 합니다.\n"
+                "4. `Use this token to access the HTTP API:` 아래 긴 문자열이 **봇 토큰**입니다.\n"
+                "5. **만든 봇에게 아무 말이나 한 번 보내세요.** "
+                "봇은 먼저 말을 건 사람에게만 보낼 수 있습니다."
+            )
+
+        token = st.text_input(
+            "봇 토큰", value=saved_token, type="password",
+            help="BotFather가 준 긴 문자열. 비밀번호와 같으니 남에게 보여주지 마세요.",
+        )
+
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            if st.button("내 chat_id 찾기", width="stretch", disabled=not token):
+                try:
+                    st.session_state.found_chat = find_chat_id(token)
+                except (RuntimeError, OSError) as e:
+                    st.session_state.found_chat = ""
+                    st.error(f"찾지 못했습니다 — {e}")
+        with c2:
+            chat_id = st.text_input(
+                "chat_id", value=st.session_state.get("found_chat", saved_chat),
+                help="받을 사람 번호. 위 버튼으로 자동으로 채울 수 있습니다.",
+            )
+
+        if st.button("💾 봇 정보 저장", type="primary", width="stretch",
+                     disabled=not (token and chat_id)):
+            save_telegram_config(token.strip(), chat_id.strip())
+            st.success("저장했습니다.")
+
+        if saved_token and saved_chat:
+            st.caption(f"저장돼 있습니다 — chat_id `{saved_chat}`")
+        else:
+            st.caption("아직 저장된 봇 정보가 없습니다.")
+
+        st.divider()
+
+        # ---------------------------------------------- 2단계: 확인
+        st.markdown("#### 2단계 — 내용 확인하고 보내보기")
+        st.caption(
+            "**'오늘 할 일' 탭에 저장된 설정 그대로** 계산합니다. "
+            f"지금은 {cfg['ticker']} · 시드 \\${cfg['initial_cash']:,.0f} · "
+            f"{round(1 / cfg['daily_buy_pct'])}분할 · 시작일 {cfg['start_date']} 입니다."
+        )
+
+        p1, p2 = st.columns(2)
+        with p1:
+            if st.button("👀 메시지 미리보기", width="stretch"):
+                try:
+                    st.session_state.preview_msg = build_message()
+                except (ValueError, RuntimeError) as e:
+                    st.session_state.preview_msg = ""
+                    st.error(f"메시지를 만들지 못했습니다 — {e}")
+        with p2:
+            if st.button("📨 지금 한 통 보내기", width="stretch",
+                         disabled=not (saved_token and saved_chat)):
+                try:
+                    st.session_state.preview_msg = send_now()
+                    st.success("보냈습니다. 텔레그램을 확인해보세요.")
+                except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
+                    st.error(f"보내지 못했습니다 — {e}")
+
+        if st.session_state.get("preview_msg"):
+            st.code(st.session_state.preview_msg, language=None)
+
+        st.divider()
+
+        # ---------------------------------------------- 3단계: 예약
+        st.markdown("#### 3단계 — 매일 자동으로 받기")
+
+        task = get_jongsa_task_status()
+        if task["exists"]:
+            st.success(f"**예약이 켜져 있습니다** — 매 평일 {nt['time']} 에 보냅니다.")
+        else:
+            st.warning("아직 예약이 꺼져 있습니다. 아래에서 켜세요.")
+
+        t1, t2 = st.columns([1, 2])
+        with t1:
+            hh, mm = (nt["time"].split(":") + ["0"])[:2]
+            send_at = st.time_input("보낼 시각", value=dtime(int(hh), int(mm)), step=1800)
+        with t2:
+            app_url = st.text_input(
+                "앱 주소 (선택)", value=nt.get("app_url", ""),
+                help="넣으면 메시지 아래에 링크로 붙습니다. 휴대폰에서 바로 열 때 편합니다.",
+            )
+
+        r1, r2 = st.columns(2)
+        with r1:
+            if st.button("⏰ 자동 발송 켜기", type="primary", width="stretch",
+                         disabled=not (saved_token and saved_chat)):
+                hhmm = send_at.strftime("%H:%M")
+                try:
+                    save_jongsa_notify_config({"time": hhmm, "app_url": app_url.strip()})
+                    register_jongsa_task(hhmm)
+                    st.success(f"켰습니다 — 매 평일 {hhmm}.")
+                    st.rerun()
+                except (RuntimeError, OSError) as e:
+                    st.error(f"예약을 걸지 못했습니다 — {e}")
+        with r2:
+            if st.button("예약 끄기", width="stretch", disabled=not task["exists"]):
+                try:
+                    remove_jongsa_task()
+                    st.success("껐습니다.")
+                    st.rerun()
+                except (RuntimeError, OSError) as e:
+                    st.error(f"해제하지 못했습니다 — {e}")
+
+        st.caption(
+            f"윈도우 작업 스케줄러에 **{JONGSA_TASK_NAME}** 이름으로 등록됩니다. "
+            "**이 PC가 켜져 있고 로그인돼 있어야** 보내집니다. 주말에는 미국장이 안 열려 "
+            "금요일과 같은 내용이 또 오므로 평일만 돌립니다.\n\n"
+            "PC를 꺼놔도 받고 싶다면 GitHub에서 돌리는 방법이 **TELEGRAM.md**에 있습니다."
+        )
+        st.caption(
+            "봇 토큰은 `telegram_config.json`, 알림 설정은 `jongsa_notify.json`에 "
+            "저장되며 둘 다 깃허브에 올라가지 않습니다."
         )
