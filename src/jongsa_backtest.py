@@ -151,6 +151,7 @@ def run_jongsa(
     sell_day_buy_mode: str = "never",
     reinvest: bool = True,
     cash_flows=None,
+    order_sized_qty: bool = True,
     dd_thresholds=(-0.20, -0.25, -0.30),
 ) -> JongsaResult:
     """종사종팔 백테스트.
@@ -165,6 +166,10 @@ def run_jongsa(
     cash_flows: 중간 입출금 [(날짜, 금액), ...]. 양수는 입금, 음수는 출금.
         출금액이 예수금보다 크면 규칙을 어기고 강제 매도하지 않고,
         가능한 만큼만 빼고 나머지는 예수금이 생길 때까지 이월한다.
+    order_sized_qty: 매수 수량을 '주문 시점에 알 수 있는 가격'으로 정한다(기본).
+        LOC 주문은 수량을 미리 적어내고 체결만 종가에 되므로 이쪽이 현실이다.
+        False면 예전처럼 그날 종가로 수량을 정한다 — 종가를 미리 아는 셈이라
+        결과가 실제보다 좋게 나온다. 예전 값과 비교할 때만 쓴다.
     """
     df = clean_prices(df)
     close = df["Close"].astype(float).values
@@ -244,6 +249,26 @@ def run_jongsa(
         had_sell_candidates = any(
             (t - lot.buy_day_idx) >= 1 for lot in open_lots
         )
+
+        # 어제 저녁 주문을 넣을 때 쓸 수 있었던 가격.
+        #
+        # 주문 수량은 '오늘 종가 ÷ 예산'으로 정할 수 없다. 주문을 넣는 시점에는
+        # 오늘 종가를 모르기 때문이다. 실제로는 아래 가격으로 나눠서 수량을 정하고,
+        # 체결은 종가에 된다. 그래서 종가가 예상보다 내리면 예산보다 적게 사고,
+        # 오르면 예산을 조금 넘겨 산다. 이 차이를 반영하지 않으면 백테스트가
+        # 현실보다 유리하게 나오고, 앱이 알려준 수량과 실제 보유량도 어긋난다.
+        #
+        # src/jongsa_live.py의 order_plan()이 실제로 쓰는 가격과 같아야 한다.
+        pending_targets = [
+            lot.target_price for lot in open_lots
+            if 1 <= (t - lot.buy_day_idx) <= stop_days - 1
+        ]
+        if pending_targets:
+            order_px = round(min(pending_targets) - 0.01, 2)   # 팔 물량이 있는 날
+        elif t > 0:
+            order_px = close[t - 1]                            # 매수 범위를 쓰는 날
+        else:
+            order_px = price   # 첫날은 이전 종가가 없다 — 하루뿐이라 그대로 둔다
 
         # ---------- 1) 매도 판정 ----------
         did_sell = False
@@ -363,8 +388,11 @@ def run_jongsa(
             if buy_amount > 0 and cash > 0:
                 if buy_amount >= cash - 1e-9:
                     cash_exhausted += 1
-                # 원본 스프레드시트 방식: 수량 = 예산*(1-수수료)/종가, 매수비용 = 종가*수량*(1+수수료)
-                qty = buy_amount * (1 - fee_rate) / price
+                # 수량은 주문 시점에 알 수 있는 가격으로 정하고, 체결은 종가에 된다.
+                # (order_sized_qty=False로 두면 예전처럼 종가로 수량을 정한다 —
+                #  현실에서는 불가능하지만 예전 결과와 비교할 때 쓴다)
+                size_px = order_px if (order_sized_qty and order_px > 0) else price
+                qty = buy_amount * (1 - fee_rate) / size_px
                 if not np.isfinite(qty) or qty < 0:
                     qty = 0.0
                 if whole_shares:
