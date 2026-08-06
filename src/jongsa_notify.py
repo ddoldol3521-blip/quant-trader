@@ -19,8 +19,7 @@ import pandas as pd
 
 from src.data.kr_data import get_kr_ohlcv
 from src.jongsa_backtest import run_jongsa
-from src.jongsa_live import business_days_between as bdays
-from src.jongsa_live import load_config, order_plan
+from src.jongsa_live import load_config, make_held_counter, order_plan
 from src.scheduler import load_jongsa_notify_config
 from src.telegram_notify import load_telegram_config, send_telegram_message
 
@@ -130,7 +129,8 @@ def build_message(today: date = None) -> str:
         whole_shares=s["whole_shares"], buy_range_pct=rng,
         moc_available=s["moc_available"], _last_close=price,
     )
-    plan = order_plan(res.final_lots, res.final_cash, total, plan_cfg, today.isoformat())
+    plan = order_plan(res.final_lots, res.final_cash, total, plan_cfg,
+                      today.isoformat(), trading_dates=hist.index)
     forced, pending, buy = plan["강제매도"], plan["목표매도"], plan["매수"]
 
     L.append("【오늘 넣을 주문】")
@@ -158,9 +158,9 @@ def build_message(today: date = None) -> str:
     # ---------- 손절 예고 ----------
     # 목표 매도는 주문만 걸어두면 알아서 체결되지만, 손절은 날짜를 직접
     # 세야 해서 제일 놓치기 쉽다. 그래서 3영업일 전부터 미리 알린다.
+    held_of = make_held_counter(today.isoformat(), hist.index)
     soon = sorted(
-        (stop - bdays(lot["buy_date"], today.isoformat()), lot)
-        for lot in res.final_lots
+        (stop - held_of(lot["buy_date"]), lot) for lot in res.final_lots
     )
     soon = [(left, lot) for left, lot in soon if 0 < left <= 3]
     if soon:

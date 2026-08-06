@@ -220,7 +220,8 @@ def target_price_for(price: float, cfg: dict) -> float:
     return tgt
 
 
-def order_plan(lots: list, cash: float, base_assets: float, cfg: dict, today: str = None) -> dict:
+def order_plan(lots: list, cash: float, base_assets: float, cfg: dict,
+               today: str = None, trading_dates=None) -> dict:
     """오늘 장 마감에 넣을 주문을 만든다.
 
     핵심: **주문을 넣는 시점에는 오늘 종가를 모른다.** 그래서 '매도가 있는 날은
@@ -234,15 +235,19 @@ def order_plan(lots: list, cash: float, base_assets: float, cfg: dict, today: st
 
     10영업일이 찬 건은 가격과 무관하게 팔아야 하므로 날짜만 보면 미리 알 수 있다.
     그런 날은 아예 매수 주문을 넣지 않는다.
+
+    trading_dates: 시세의 거래일 목록. 넘기면 보유일을 실제 거래일로 세서
+    미국 공휴일이 낀 주에도 손절일이 엔진과 어긋나지 않는다.
     """
     today = today or _today_str()
     stop_days = int(cfg["stop_days"])
     last_close = cfg.get("_last_close", 0.0)
     has_moc = cfg.get("moc_available", True)
+    held_of = make_held_counter(today, trading_dates)
 
     forced, pending = [], []
     for lot in lots:
-        held = business_days_between(lot["buy_date"], today)
+        held = held_of(lot["buy_date"])
         row = {**lot, "보유영업일": held}
         if held >= stop_days:
             # MOC가 없는 증권사면 '아주 낮은 지정가 LOC 매도'로 대신한다.
@@ -305,9 +310,43 @@ def order_plan(lots: list, cash: float, base_assets: float, cfg: dict, today: st
 def business_days_between(start: str, end: str) -> int:
     """두 날짜 사이 영업일 수 (주말만 제외, 공휴일은 미반영).
 
-    미국 공휴일까지 정확히 세려면 거래일 캘린더가 필요하다. 여기서는 근사치를 쓰고,
-    화면에 '공휴일은 반영 안 됨'을 표시한다.
+    거래일 목록을 못 넘겨줄 때 쓰는 대비책이다. 공휴일이 끼면 하루 빨라지므로
+    가능하면 make_held_counter()를 쓴다.
     """
     import numpy as np
 
     return int(np.busday_count(np.datetime64(start), np.datetime64(end)))
+
+
+def make_held_counter(today: str, trading_dates=None):
+    """'매수일 -> 보유 거래일 수'를 세는 함수를 만든다.
+
+    엔진(run_jongsa)은 시세에 들어 있는 거래일 순번으로 보유일을 센다.
+    화면과 알림도 같은 방식으로 세야 손절일이 어긋나지 않는다.
+
+    예전에는 달력 평일(business_days_between)로 셌는데, 미국 공휴일을
+    거래일로 착각해서 **하루 일찍 팔라고** 했다. 2026년 1~8월 148거래일 중
+    5일이 그랬다 (독립기념일·메모리얼데이 등이 낀 주).
+
+    trading_dates: 시세 데이터의 인덱스(실제 거래일). 없으면 예전 방식으로 돌아간다.
+    """
+    fallback = lambda buy: business_days_between(buy, today)   # noqa: E731
+    if trading_dates is None or len(trading_dates) == 0:
+        return fallback
+
+    days = [str(d)[:10] for d in trading_dates]
+    idx = {d: i for i, d in enumerate(days)}
+
+    t = idx.get(today[:10])
+    if t is None:
+        if today[:10] <= days[-1]:
+            return fallback     # 데이터 중간인데 없는 날 — 뭔가 어긋났다
+        # 오늘이 데이터 마지막 날보다 뒤 = 아직 종가가 안 나온 오늘.
+        # 마지막 거래일 바로 다음 거래일로 친다.
+        t = len(days)
+
+    def held(buy: str) -> int:
+        i = idx.get(buy[:10])
+        return t - i if i is not None else business_days_between(buy, today)
+
+    return held

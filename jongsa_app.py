@@ -18,9 +18,8 @@ import streamlit as st
 from src.data.kr_data import get_kr_ohlcv
 from src.jongsa_backtest import run_buy_and_hold, run_jongsa
 from src.jongsa_live import BUY_RANGE_SKIPS_15Y, BUY_RANGE_VS_NOLIMIT, PRESETS, SELL_DAY_MODES
-from src.jongsa_live import business_days_between as bdays
 from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
-from src.jongsa_live import order_plan, target_price_for
+from src.jongsa_live import make_held_counter, order_plan, target_price_for
 from src.jongsa_notify import build_message, send_now
 from src.scheduler import (JONGSA_TASK_NAME, get_jongsa_task_status, load_jongsa_notify_config,
                            register_jongsa_task, remove_jongsa_task, save_jongsa_notify_config)
@@ -578,7 +577,8 @@ if ready:
     # 오늘 종가를 모르는 상태에서 주문을 짠다 (원문 요령: 매수 LOC = 최저 목표가 - 0.01)
     plan_cfg = {**cfg, "_last_close": price}
     plan = order_plan(
-        res.final_lots, cash, (total if reinvest else put_in), plan_cfg, date.today().isoformat()
+        res.final_lots, cash, (total if reinvest else put_in), plan_cfg,
+        date.today().isoformat(), trading_dates=hist.index,
     )
     forced, pending, buy = plan["강제매도"], plan["목표매도"], plan["매수"]
 
@@ -668,8 +668,9 @@ if ready:
         st.markdown(f"### 📦 현재 보유 ({len(res.final_lots)}건)")
         if res.final_lots:
             hold = []
+            held_of = make_held_counter(date.today().isoformat(), hist.index)
             for lot in sorted(res.final_lots, key=lambda x: x["buy_date"]):
-                held = bdays(lot["buy_date"], date.today().isoformat())
+                held = held_of(lot["buy_date"])
                 left = int(stop_days) - held
                 hold.append({
                     "매수일": lot["buy_date"],
@@ -713,7 +714,7 @@ if ready:
 
     st.caption(
         "⏰ LOC/MOC는 **미 동부 15:50(한국시간 새벽 4:50, 서머타임 해제 시 5:50)** 까지 넣어야 합니다. "
-        "저녁에 미리 걸어두면 됩니다. · 보유일은 주말만 제외한 근사치라 미국 공휴일은 반영되지 않습니다. "
+        "저녁에 미리 걸어두면 됩니다. · 보유일은 실제로 장이 열린 날만 셉니다 (주말·미국 공휴일 제외). "
         "· 성과 그래프와 존버 비교는 **📊 백테스트** 탭에 있습니다."
     )
 
@@ -765,7 +766,7 @@ if ready:
         },
     )
     st.caption(
-        "⚠️ 체결가를 모두 종가로 가정했고 미국 공휴일·배당은 반영하지 않았습니다. "
+        "⚠️ 체결가를 모두 종가로 가정했고 배당은 반영하지 않았습니다. "
         "실제 거래하셨다면 증권사 기록이 우선입니다."
     )
 
