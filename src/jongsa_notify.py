@@ -17,7 +17,7 @@ from datetime import date
 
 import pandas as pd
 
-from src.data.kr_data import get_kr_ohlcv
+from src.data.kr_data import get_dividends, get_kr_ohlcv
 from src.jongsa_backtest import run_jongsa
 from src.jongsa_live import load_config, make_held_counter, order_plan
 from src.scheduler import load_jongsa_notify_config
@@ -87,7 +87,7 @@ def build_message(today: date = None) -> str:
         daily_buy_pct=s["daily_pct"], stop_days=stop, fee_rate=s["fee"],
         whole_shares=s["whole_shares"], fee_in_target=s["fee_in_target"],
         sell_day_buy_mode=s["sell_day_buy_mode"], reinvest=s["reinvest"],
-        buy_range_pct=rng,
+        buy_range_pct=rng, dividends=get_dividends(ticker, s["start"], today.isoformat()),
     )
 
     last = res.daily_log.iloc[-1]
@@ -118,8 +118,13 @@ def build_message(today: date = None) -> str:
     if not did:
         L.append("· 체결 없음")
 
+    if pd.notna(last.get("배당")):
+        L.append(f"🪙 배당 ${float(last['배당']):,.2f} 입금")
+
     L.append(f"💰 총자산 ${total:,.0f} ({res.net_profit:+,.0f} / {res.net_return_pct:+.2f}%)")
     L.append(f"   보유 {int(last['보유건수'])}건 {float(last['보유수량']):,.0f}주 · 현금 ${cash:,.0f}")
+    if res.total_dividends > 0:
+        L.append(f"   받은 배당 합계 ${res.total_dividends:,.2f} (재투자 안 함)")
     L.append("")
 
     # ---------- 오늘 넣을 주문 ----------
@@ -129,7 +134,8 @@ def build_message(today: date = None) -> str:
         whole_shares=s["whole_shares"], buy_range_pct=rng,
         moc_available=s["moc_available"], _last_close=price,
     )
-    plan = order_plan(res.final_lots, res.final_cash, total, plan_cfg,
+    # 배당은 하루 매수금 기준액에서 뺀다 (재투자하지 않으므로)
+    plan = order_plan(res.final_lots, res.final_cash, total - res.total_dividends, plan_cfg,
                       today.isoformat(), trading_dates=hist.index)
     forced, pending, buy = plan["강제매도"], plan["목표매도"], plan["매수"]
 

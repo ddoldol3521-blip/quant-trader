@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pandas as pd
 import streamlit as st
 
-from src.data.kr_data import get_kr_ohlcv
+from src.data.kr_data import get_dividends, get_kr_ohlcv
 from src.jongsa_backtest import run_buy_and_hold, run_jongsa
 from src.jongsa_live import BUY_RANGE_SKIPS_15Y, BUY_RANGE_VS_NOLIMIT, PRESETS, SELL_DAY_MODES
 from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
@@ -268,6 +268,12 @@ def load_price_history(ticker: str, start: str, end: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
+def load_dividends(ticker: str, start: str, end: str) -> pd.Series:
+    """배당 내역. 못 받아와도 빈 값이 오므로 계산은 그대로 된다."""
+    return get_dividends(ticker, start, end)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
 def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode,
              reinvest, flows, buy_range=None):
     """시작일부터 오늘까지 규칙대로 돌린다. 설정이 같으면 캐시에서 바로 나온다.
@@ -279,15 +285,17 @@ def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole,
     존버(그냥 사서 놔두기)도 같은 입출금 조건으로 같이 돌려서 비교한다.
     """
     hist = load_price_history(ticker, start, today)
+    div = load_dividends(ticker, start, today)
     res = run_jongsa(
         hist, "V5",
         initial_cash=cash, target_return=tgt, daily_buy_pct=pct, stop_days=int(stop),
         fee_rate=fee, whole_shares=whole, fee_in_target=fee_in_tgt,
         sell_day_buy_mode=mode, reinvest=reinvest, cash_flows=list(flows),
-        buy_range_pct=buy_range,
+        buy_range_pct=buy_range, dividends=div,
     )
     bh = run_buy_and_hold(
-        hist, initial_cash=cash, fee_rate=fee, whole_shares=whole, cash_flows=list(flows)
+        hist, initial_cash=cash, fee_rate=fee, whole_shares=whole,
+        cash_flows=list(flows), dividends=div,
     )
     return res, hist, bh
 
@@ -535,12 +543,21 @@ if ready:
     profit = res.net_profit
     has_flows = bool(st.session_state.flows)
 
-    k = st.columns(7 if has_flows else 6)
+    # 배당은 받은 게 있을 때만 칸을 내준다. 0이면 자리만 차지한다.
+    has_div = res.total_dividends > 0
+
+    k = st.columns(6 + int(has_flows) + int(has_div))
     i = 0
     k[i].metric("총자산", f"${total:,.0f}"); i += 1
     if has_flows:
         k[i].metric("넣은 돈", f"${put_in:,.0f}", f"시드 ${seed:,.0f}"); i += 1
     k[i].metric("누적 손익금", f"${profit:+,.0f}"); i += 1
+    if has_div:
+        k[i].metric(
+            "받은 배당", f"${res.total_dividends:,.2f}",
+            f"손익의 {res.total_dividends / profit * 100:.1f}%" if profit > 0 else None,
+            help="배당은 따로 쌓아두고 매매에 쓰지 않습니다 (재투자 안 함). 총자산에는 포함됩니다.",
+        ); i += 1
     k[i].metric("누적 수익률", f"{res.net_return_pct:+.2f}%"); i += 1
     k[i].metric("남은 현금", f"${cash:,.0f}", f"{cash/total*100:.0f}%" if total else None); i += 1
     # '현재가'가 아니라 바로 직전 거래일의 종가다. 라벨과 날짜를 명확히 한다.
@@ -576,8 +593,11 @@ if ready:
 
     # 오늘 종가를 모르는 상태에서 주문을 짠다 (원문 요령: 매수 LOC = 최저 목표가 - 0.01)
     plan_cfg = {**cfg, "_last_close": price}
+    # 하루 매수금 기준액에서 배당은 뺀다. 넣으면 그게 배당 재투자가 되고,
+    # 엔진(prev_total_assets)과도 어긋나 안내 수량이 실제와 달라진다.
+    trading_assets = total - res.total_dividends
     plan = order_plan(
-        res.final_lots, cash, (total if reinvest else put_in), plan_cfg,
+        res.final_lots, cash, (trading_assets if reinvest else put_in), plan_cfg,
         date.today().isoformat(), trading_dates=hist.index,
     )
     forced, pending, buy = plan["강제매도"], plan["목표매도"], plan["매수"]
@@ -766,8 +786,8 @@ if ready:
         },
     )
     st.caption(
-        "⚠️ 체결가를 모두 종가로 가정했고 배당은 반영하지 않았습니다. "
-        "실제 거래하셨다면 증권사 기록이 우선입니다."
+        "⚠️ 체결가를 모두 종가로 가정했습니다. 배당은 받은 날짜에 따로 쌓이고 "
+        "매매에는 쓰지 않습니다 (재투자 안 함). 실제 거래하셨다면 증권사 기록이 우선입니다."
     )
 
 # ============================================================ 백테스트

@@ -88,6 +88,39 @@ def get_kr_ohlcv(code: str, start: str, end: str) -> pd.DataFrame:
     return _clip(_yf_ohlcv(code, start, end), start, end)
 
 
+def get_dividends(code: str, start: str, end: str) -> pd.Series:
+    """배당락일별 주당 배당금. 없거나 못 받아오면 빈 Series를 준다.
+
+    시세(FinanceDataReader / yfinance auto_adjust=False)의 종가는 **배당이
+    반영되지 않은 값**이다. 배당락일에 주가가 그만큼 떨어진 채로 들어온다는 뜻이라,
+    받은 배당을 따로 더해줘야 실제 계좌와 맞는다. (확인: SOXL 2024-06-25
+    배당락일 기준 FDR 종가 = yfinance 미조정 종가, 조정 종가와는 $0.90 차이)
+
+    배당은 yfinance에서만 받을 수 있어서 FinanceDataReader 경로가 없다.
+    못 받아도 시세 계산은 그대로 되어야 하므로 조용히 빈 값을 돌려준다.
+    """
+    empty = pd.Series(dtype="float64")
+    try:
+        from src import ssl_fix
+
+        ssl_fix.apply()
+        import yfinance as yf
+
+        for sym in _yf_symbols(code):
+            div = yf.Ticker(sym).dividends
+            if div is None or len(div) == 0:
+                continue
+            idx = pd.to_datetime(div.index)
+            if getattr(idx, "tz", None) is not None:
+                idx = idx.tz_localize(None)
+            div = pd.Series(div.to_numpy(dtype="float64"), index=idx.normalize())
+            div = div[(div.index >= pd.Timestamp(start)) & (div.index <= pd.Timestamp(end))]
+            return div[div > 0]
+    except Exception:
+        pass
+    return empty
+
+
 def fetch_universe_data(universe: pd.DataFrame, start: str, end: str, show_progress: bool = True) -> dict:
     """여러 종목의 시세를 병렬로 받아온다. 반환: {종목코드: DataFrame}
 

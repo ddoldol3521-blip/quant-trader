@@ -63,6 +63,11 @@ class JongsaResult:
     net_profit: float = 0.0
     net_return_pct: float = 0.0
     flow_notes: list = field(default_factory=list)
+    # ----- 배당 -----
+    # 받은 배당은 따로 쌓아둔다. 총자산에는 들어가지만 하루 매수금을 정하는
+    # 기준에서는 빠진다 (= 재투자하지 않는다).
+    total_dividends: float = 0.0
+    dividend_curve: pd.Series = field(default_factory=pd.Series)
 
 
 # 이보다 짧은 기간을 연 단위로 환산하면 숫자가 터무니없어진다.
@@ -132,6 +137,30 @@ def _resolve_flows(cash_flows, dates) -> tuple:
     return flows, notes
 
 
+def _resolve_dividends(dividends, dates) -> np.ndarray:
+    """배당락일별 주당 배당금을 거래일 인덱스 배열로 바꾼다.
+
+    배당락일이 거래일 목록에 없으면(휴장일로 들어온 경우) 다음 거래일로 민다.
+    기간 밖이면 버린다.
+    """
+    n = len(dates)
+    out = np.zeros(n)
+    if dividends is None or len(dividends) == 0:
+        return out
+
+    for d, amt in dividends.items():
+        try:
+            amt = float(amt)
+        except (TypeError, ValueError):
+            continue
+        if amt <= 0:
+            continue
+        idx = int(dates.searchsorted(pd.Timestamp(d).normalize(), side="left"))
+        if idx < n:
+            out[idx] += amt
+    return out
+
+
 def run_jongsa(
     df: pd.DataFrame,
     version: str = "V5",
@@ -152,6 +181,7 @@ def run_jongsa(
     reinvest: bool = True,
     cash_flows=None,
     order_sized_qty: bool = True,
+    dividends=None,
     dd_thresholds=(-0.20, -0.25, -0.30),
 ) -> JongsaResult:
     """종사종팔 백테스트.
@@ -170,6 +200,9 @@ def run_jongsa(
         LOC 주문은 수량을 미리 적어내고 체결만 종가에 되므로 이쪽이 현실이다.
         False면 예전처럼 그날 종가로 수량을 정한다 — 종가를 미리 아는 셈이라
         결과가 실제보다 좋게 나온다. 예전 값과 비교할 때만 쓴다.
+    dividends: 배당락일별 주당 배당금 Series. 받은 배당은 **따로 쌓아두고
+        매매에 쓰지 않는다**. 총자산에는 더해지지만 하루 매수금을 정하는
+        기준 금액에서는 빠진다 (= 배당은 재투자하지 않는다).
     """
     df = clean_prices(df)
     close = df["Close"].astype(float).values
@@ -203,11 +236,21 @@ def run_jongsa(
     contributed_arr = np.zeros(n)
     pending_withdrawal = 0.0              # 예수금이 모자라 아직 못 뺀 출금액
 
+    div_by_idx = _resolve_dividends(dividends, dates)
+    dividend_cash = 0.0        # 받은 배당. 따로 둔다 — 매매에 쓰지 않는다
+    dividend_arr = np.zeros(n)
+
     for t in range(n):
         price = close[t]
         sell_qty_today = 0.0
         sell_amt_today = 0.0
         sell_reasons: list[str] = []
+
+        # ---------- 배당 ----------
+        # 배당락일 전날 종가에 갖고 있어야 받는다. 그래서 그날 매매를 하기 전,
+        # 어제부터 들고 온 수량으로 계산한다.
+        div_today = div_by_idx[t] * shares if div_by_idx[t] > 0 else 0.0
+        dividend_cash += div_today
 
         # ---------- 0) 입출금 ----------
         # 그날 매매를 판단하기 전에 먼저 반영한다. 입금한 돈은 그날 바로 쓸 수 있다.
@@ -423,12 +466,16 @@ def run_jongsa(
             buy_target_today = None
 
         # ---------- 3) 기록 ----------
-        total = cash + shares * price
+        # 하루 매수금은 '굴리는 돈'만 기준으로 삼는다. 배당까지 넣으면
+        # 그게 곧 배당 재투자가 된다.
+        trading_assets = cash + shares * price
+        total = trading_assets + dividend_cash
         equity[t] = total
         exposure[t] = (shares * price / total) if total > 0 else 0.0
         open_lot_counts[t] = len(open_lots)
         contributed_arr[t] = contributed
-        prev_total_assets = total
+        dividend_arr[t] = dividend_cash
+        prev_total_assets = trading_assets
 
         log_rows.append(
             {
@@ -446,6 +493,8 @@ def run_jongsa(
                 "보유건수": len(open_lots),
                 "평가금": round(shares * price, 2),
                 "예수금": round(cash, 2),
+                "배당": round(div_today, 2) if div_today else None,
+                "누적배당": round(dividend_cash, 2),
                 "총자산": round(total, 2),
                 "넣은돈": round(contributed, 2),
                 "순손익": round(total - contributed, 2),
@@ -520,6 +569,8 @@ def run_jongsa(
         final_value=float(equity_s.iloc[-1]),
         twr_curve=twr_s,
         contributed_curve=contributed_s,
+        total_dividends=float(dividend_cash),
+        dividend_curve=pd.Series(dividend_arr, index=dates, name="dividend"),
         total_contributed=float(contributed),
         net_profit=float(equity_s.iloc[-1] - contributed),
         net_return_pct=float((equity_s.iloc[-1] / contributed - 1) * 100) if contributed > 0 else float("nan"),
@@ -533,24 +584,30 @@ def run_buy_and_hold(
     fee_rate: float = 0.0,
     whole_shares: bool = True,
     cash_flows=None,
+    dividends=None,
 ) -> pd.Series:
     """'존버' 비교용 — 첫날 전액 매수하고 그냥 들고 있는다.
 
     같은 조건에서 비교해야 의미가 있으므로 입출금도 똑같이 반영한다.
     입금하면 그날 종가로 더 사고, 출금하면 그날 종가로 그만큼 판다.
+    배당도 전략 쪽과 같은 규칙으로 받는다 — 따로 쌓아두고 재투자하지 않는다.
+    (존버는 계속 들고 있으니 배당을 다 받는다. 안 넣으면 비교가 불공정해진다)
     """
     df = clean_prices(df)
     close = df["Close"].astype(float).values
     dates = df.index
     n = len(close)
     flows, _ = _resolve_flows(cash_flows, dates)
+    div_by_idx = _resolve_dividends(dividends, dates)
 
     cash = float(initial_cash)
     shares = 0.0
+    dividend_cash = 0.0
     values = np.zeros(n)
 
     for t in range(n):
         price = close[t]
+        dividend_cash += div_by_idx[t] * shares if div_by_idx[t] > 0 else 0.0
         cash += flows[t] if flows[t] > 0 else 0.0
 
         if flows[t] < 0:  # 출금 — 예수금 먼저 쓰고 모자라면 판다
@@ -574,7 +631,7 @@ def run_buy_and_hold(
                 cash -= qty * price * (1 + fee_rate)
                 shares += qty
 
-        values[t] = cash + shares * price
+        values[t] = cash + shares * price + dividend_cash
 
     return pd.Series(values, index=dates, name="buy_and_hold")
 
