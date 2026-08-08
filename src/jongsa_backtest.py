@@ -425,6 +425,7 @@ def run_jongsa(
                 desired = season_seed if season_reseed else v4_daily_target
 
             buy_amount = min(desired, cash)
+            buy_budget_today = buy_amount
             buy_qty_today = 0.0
             buy_amt_today = 0.0
             buy_target_today = None
@@ -461,6 +462,7 @@ def run_jongsa(
                         buy_amt_today = spend
                         buy_target_today = tgt
         else:
+            buy_budget_today = 0.0
             buy_qty_today = 0.0
             buy_amt_today = 0.0
             buy_target_today = None
@@ -484,6 +486,10 @@ def run_jongsa(
                 "입출금": round(applied_flows[t], 2) if abs(applied_flows[t]) > 1e-9 else None,
                 "매수금액": round(buy_amt_today, 2) if buy_amt_today else None,
                 "매수수량": round(buy_qty_today) if buy_qty_today else None,
+                # 그날 걸었던 LOC 매수 지정가와 쓸 수 있었던 하루 매수금.
+                # 둘이 있어야 '예산을 다 못 썼는지'를 나중에 따져볼 수 있다.
+                "매수지정가": round(order_px, 2) if buy_qty_today else None,
+                "매수예산": round(buy_budget_today, 2) if buy_qty_today else None,
                 "목표가": round(buy_target_today, 2) if buy_target_today else None,
                 "매도수량": round(sell_qty_today) if sell_qty_today else None,
                 "매도금액": round(sell_amt_today, 2) if sell_amt_today else None,
