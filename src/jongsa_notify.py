@@ -70,6 +70,8 @@ def settings() -> dict:
         "sell_day_buy_mode": cfg["sell_day_buy_mode"],
         "reinvest": cfg["reinvest"],
         "moc_available": cfg["moc_available"],
+        "ladder_rungs": env("JONGSA_LADDER_RUNGS", cfg.get("ladder_rungs", 0), int),
+        "ladder_step": env("JONGSA_LADDER_STEP", cfg.get("ladder_step", 0.03) * 100, float) / 100,
     }
 
 
@@ -88,6 +90,7 @@ def build_message(today: date = None) -> str:
         whole_shares=s["whole_shares"], fee_in_target=s["fee_in_target"],
         sell_day_buy_mode=s["sell_day_buy_mode"], reinvest=s["reinvest"],
         buy_range_pct=rng, dividends=get_dividends(ticker, s["start"], today.isoformat()),
+        ladder_rungs=s["ladder_rungs"], ladder_step=s["ladder_step"],
     )
 
     last = res.daily_log.iloc[-1]
@@ -133,6 +136,7 @@ def build_message(today: date = None) -> str:
         fee_rate=s["fee"], fee_in_target=s["fee_in_target"],
         whole_shares=s["whole_shares"], buy_range_pct=rng,
         moc_available=s["moc_available"], _last_close=price,
+        ladder_rungs=s["ladder_rungs"], ladder_step=s["ladder_step"],
     )
     # 배당은 하루 매수금 기준액에서 뺀다 (재투자하지 않으므로)
     plan = order_plan(res.final_lots, res.final_cash, total - res.total_dividends, plan_cfg,
@@ -157,6 +161,12 @@ def build_message(today: date = None) -> str:
         L.append(f"🟢 MOC 매수 {buy['qty']:,.0f}주")
     else:
         L.append(f"· 매수 없음 — {buy['reason']}")
+
+    # 사다리 주문 — 종가가 더 낮게 끝날 때 예산을 마저 쓰는 추가 주문
+    cum = buy["qty"]
+    for q, px in buy.get("사다리", []):
+        cum += q
+        L.append(f"   ➕ 추가 {q:,.0f}주 @ ${px:,.2f}  (여기까지면 총 {cum:,.0f}주)")
 
     if plan["부족"] and buy["type"]:
         L.append(f"⚠️ 예수금 부족 — 목표 ${plan['목표금액']:,.0f} 중 ${cash:,.0f}만 가능")

@@ -16,6 +16,10 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+# 주문을 만드는 규칙은 실전 쪽(jongsa_live)에 있다. 백테스트가 그걸 그대로
+# 가져다 써야 '앱이 알려준 주문'과 '엔진이 계산한 결과'가 어긋나지 않는다.
+from src.jongsa_live import build_ladder
+
 TRADING_DAYS_PER_YEAR = 252
 
 
@@ -182,6 +186,8 @@ def run_jongsa(
     cash_flows=None,
     order_sized_qty: bool = True,
     dividends=None,
+    ladder_rungs: int = 0,
+    ladder_step: float = 0.03,
     dd_thresholds=(-0.20, -0.25, -0.30),
 ) -> JongsaResult:
     """종사종팔 백테스트.
@@ -203,6 +209,9 @@ def run_jongsa(
     dividends: 배당락일별 주당 배당금 Series. 받은 배당은 **따로 쌓아두고
         매매에 쓰지 않는다**. 총자산에는 더해지지만 하루 매수금을 정하는
         기준 금액에서는 빠진다 (= 배당은 재투자하지 않는다).
+    ladder_rungs / ladder_step: 사다리 주문(정액매수). 기본 매수 아래로
+        지정가를 낮춰가며 주문을 몇 칸 더 걸지. 0이면 안 쓴다.
+        자세한 계산은 src/jongsa_live.py의 build_ladder() 참고.
     """
     df = clean_prices(df)
     close = df["Close"].astype(float).values
@@ -441,6 +450,16 @@ def run_jongsa(
                     qty = 0.0
                 if whole_shares:
                     qty = float(int(qty))
+                    # 사다리 주문: 기본 주문 아래에 걸어둔 칸들 중 종가가 지정가
+                    # 이하인 것까지 체결된다. 지정가가 내림차순이라 위에서부터
+                    # 하나라도 안 되면 그 아래도 안 된다.
+                    for rung_qty, rung_px in build_ladder(
+                        buy_amount, size_px, qty,
+                        rungs=ladder_rungs, step=ladder_step, fee=fee_rate,
+                    ):
+                        if price > rung_px:
+                            break
+                        qty += rung_qty
                 if qty > 0:
                     spend = qty * price * (1 + fee_rate)
                     if spend > cash:  # 반올림으로 예수금을 넘지 않게

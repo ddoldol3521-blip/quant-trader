@@ -87,6 +87,8 @@ _URL_KEYS = {
     "m": ("sell_day_buy_mode", str),
     "mo": ("moc_available", None),   # 1 / 0
     "br": ("buy_range_pct", None),   # % 로 넣고 소수로 바꾼다
+    "lr": ("ladder_rungs", int),     # 사다리 칸 수
+    "ls": ("ladder_step", None),     # % 로 넣고 소수로 바꾼다
 }
 
 
@@ -120,7 +122,7 @@ def cfg_from_url(base: dict) -> dict:
         try:
             if key == "n":
                 cfg["daily_buy_pct"] = 1 / int(raw)
-            elif key in ("r", "f", "br"):
+            elif key in ("r", "f", "br", "ls"):
                 cfg[name] = float(raw) / 100
             elif key in ("ri", "mo"):
                 cfg[name] = raw not in ("0", "false", "False")
@@ -145,6 +147,8 @@ def cfg_to_url(cfg: dict, flows: list) -> None:
         "m": cfg["sell_day_buy_mode"],
         "mo": "1" if cfg.get("moc_available", True) else "0",
         "br": f"{cfg.get('buy_range_pct', 0.10) * 100:g}",
+        "lr": f"{int(cfg.get('ladder_rungs', 0))}",
+        "ls": f"{cfg.get('ladder_step', 0.03) * 100:g}",
     }
     if flows:
         params["c"] = flows_to_param(flows)
@@ -275,7 +279,7 @@ def load_dividends(ticker: str, start: str, end: str) -> pd.Series:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode,
-             reinvest, flows, buy_range=None):
+             reinvest, flows, buy_range=None, ladder_rungs=0, ladder_step=0.03):
     """시작일부터 오늘까지 규칙대로 돌린다. 설정이 같으면 캐시에서 바로 나온다.
 
     today를 인자로 받는 이유: 캐시 키에 날짜가 들어가야 날이 바뀌는 순간
@@ -292,6 +296,7 @@ def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole,
         fee_rate=fee, whole_shares=whole, fee_in_target=fee_in_tgt,
         sell_day_buy_mode=mode, reinvest=reinvest, cash_flows=list(flows),
         buy_range_pct=buy_range, dividends=div,
+        ladder_rungs=ladder_rungs, ladder_step=ladder_step,
     )
     bh = run_buy_and_hold(
         hist, initial_cash=cash, fee_rate=fee, whole_shares=whole,
@@ -426,6 +431,7 @@ with tab_home:
                 fee_pct / 100, cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
                 cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
                 cfg.get("buy_range_pct", 0.10),
+                int(cfg.get("ladder_rungs", 0)), float(cfg.get("ladder_step", 0.03)),
             )
     except Exception as e:
         ready = False   # 아래 탭들이 쓸 계산 결과가 없다는 뜻
@@ -669,6 +675,30 @@ if ready:
             )
         else:
             st.error(f"### 오늘은 매수 없음\n\n{buy['reason']}")
+
+        # 사다리 주문 — 기본 주문 아래로 더 걸어서 남는 예산을 채운다
+        if buy.get("사다리"):
+            rows = []
+            cum = buy["qty"]
+            for q, px in buy["사다리"]:
+                cum += q
+                rows.append({
+                    "추가 주문": f"{q:,.0f}주",
+                    "LOC 지정가": f"${px:,.2f}",
+                    "이 가격 이하면 총": f"{cum:,.0f}주",
+                    "쓰는 돈": f"${cum * px:,.0f}",
+                })
+            st.markdown("**➕ 사다리 주문** — 아래 주문도 같이 걸어두세요")
+            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True,
+                         height=45 + 35 * len(rows))
+            _last_px = buy["사다리"][-1][1]
+            st.caption(
+                f"**왜 거나** — 종가가 지정가보다 낮게 끝나면 예산이 남습니다. "
+                f"아래에 미리 걸어두면 그만큼 더 사서 예산을 채웁니다. "
+                f"**예산을 넘기지 않습니다** (지정가를 내림으로 잡았습니다). "
+                f"기본 지정가보다 낮으니 **매도가 일어나는 날엔 하나도 안 걸립니다.** "
+                f"종가가 \\${_last_px:,.2f} 밑으로 더 빠지면 그때는 예산이 조금 남습니다."
+            )
 
         if plan["부족"] and buy["type"]:
             st.warning(
@@ -1117,6 +1147,28 @@ with tab_help:
                 "반대로 +20% 이상은 사실상 제한이 없는 것과 같습니다."
             )
 
+        st.markdown("### ➕ 사다리 주문 (정액매수)")
+        l1, l2 = st.columns(2)
+        with l1:
+            lr = st.number_input(
+                "사다리 칸 수", 0, 10, int(cfg.get("ladder_rungs", 3)), 1,
+                help="기본 매수 아래로 몇 개를 더 걸지. 0이면 안 씁니다.",
+            )
+        with l2:
+            ls = st.number_input(
+                "칸 간격 (%)", 0.5, 10.0, float(cfg.get("ladder_step", 0.03)) * 100, 0.5,
+                help="한 칸마다 몇 %씩 내려갈지.",
+            )
+        if lr:
+            st.caption(
+                f"기준가에서 **−{lr * ls:.0f}%**까지 덮습니다. "
+                "LOC는 수량을 미리 적어내는데 종가가 지정가보다 낮게 끝나면 예산이 남습니다. "
+                "아래에 주문을 더 걸어 그만큼 채웁니다. **예산은 절대 안 넘깁니다.** "
+                "계좌가 커져도 주문 개수는 그대로이고, 칸마다 담기는 수량이 늘어납니다."
+            )
+        else:
+            st.caption("**안 씁니다.** 주문은 하루 하나로 단순해지지만 예산의 4% 정도가 남습니다.")
+
         moc = st.checkbox(
             "내 증권사에 **MOC(종가 시장가)**가 있다", cfg.get("moc_available", True),
             help="손절일 매도에만 씁니다. 없으면 LOC로 대신하는 방법을 알려줍니다.",
@@ -1140,6 +1192,7 @@ with tab_help:
                 "sell_day_buy_mode": m, "fee_in_target": bool(fit),
                 "whole_shares": bool(ws), "moc_available": bool(moc),
                 "buy_range_pct": br / 100,
+                "ladder_rungs": int(lr), "ladder_step": ls / 100,
             })
             save_config(cfg)
             st.rerun()

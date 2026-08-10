@@ -10,6 +10,7 @@
 """
 
 import json
+import math
 import os
 from datetime import date
 from pathlib import Path
@@ -46,7 +47,48 @@ DEFAULT_CONFIG = {
     # (원작자 답변: "매도 물량이 있을 때는 매수가를 최저매도가-0.01로 해서
     #  매수나 매도만 생기게 되어있어요 / 시즌 첫 주문은 매수 범위 적용 되구요")
     "buy_range_pct": 0.10,
+    # '사다리 주문' — 기본 매수 아래로 지정가를 낮춰가며 주문을 더 건다.
+    # LOC는 수량을 미리 적어내는데 종가가 지정가보다 낮게 끝나면 예산이 남는다.
+    # 아래쪽에 주문을 더 걸어두면 그만큼 더 사서 예산을 채운다.
+    # 0이면 안 쓴다.
+    "ladder_rungs": 3,
+    "ladder_step": 0.03,   # 칸 간격. 기준가에서 -3%, -6%, -9% 지점을 덮는다
 }
+
+
+def build_ladder(budget: float, size_px: float, base_qty: float,
+                 rungs: int = 3, step: float = 0.03, fee: float = 0.0) -> list:
+    """기본 매수 아래로 걸 추가 LOC 주문 목록. [(수량, 지정가), ...]
+
+    k번째 칸의 목표 누적수량  Nk = floor(예산 / (기준가 x (1 - k*간격)))
+    k번째 칸의 수량          = Nk - N(k-1)   (0이면 건너뛴다)
+    k번째 칸의 지정가        = 예산 / Nk 를 센트 단위로 **내림**
+
+    내림이 중요하다. 올리면 그 가격에 체결됐을 때 예산을 넘긴다.
+    내리면 (Nk x 지정가) <= 예산 이 항상 성립한다.
+
+    카페에서 도는 방식은 '1주씩' 늘려가는 것인데, 계좌가 커지면 한 번에
+    수백 주를 사게 되어 1주짜리 주문을 수십 개 걸어야 한다. 여기서는 칸 수를
+    고정하고 칸마다 필요한 수량을 담는다 — 계좌가 커져도 주문 개수는 그대로다.
+
+    추가 주문은 모두 기본 지정가보다 낮다. 그래서 목표가에 닿아 매도가
+    일어나는 날에는 하나도 체결되지 않는다 ('판 날은 안 산다'가 유지된다).
+    """
+    out = []
+    if not rungs or rungs < 1 or step <= 0 or size_px <= 0 or base_qty <= 0:
+        return out
+
+    usable = budget * (1 - fee)
+    prev = int(base_qty)
+    for k in range(1, int(rungs) + 1):
+        px = size_px * (1 - k * step)
+        if px <= 0:
+            break
+        n = int(usable / px)
+        if n > prev:
+            out.append((n - prev, math.floor(usable / n * 100) / 100))
+            prev = n
+    return out
 
 # 매수 범위별 실제 영향. 백테스트를 돌려서 얻은 값이다.
 #
@@ -266,7 +308,8 @@ def order_plan(lots: list, cash: float, base_assets: float, cfg: dict,
     budget = min(desired, max(cash, 0.0))
     fee = cfg.get("fee_rate", 0.0)
 
-    buy = {"type": None, "limit": None, "budget": budget, "qty": 0.0, "cost": 0.0, "reason": ""}
+    buy = {"type": None, "limit": None, "budget": budget, "qty": 0.0, "cost": 0.0,
+           "reason": "", "기준가": None, "사다리": []}
 
     if forced:
         buy["reason"] = f"{stop_days}영업일이 찬 건이 있어 오늘은 무조건 매도일입니다 (매수 안 함)"
@@ -297,6 +340,16 @@ def order_plan(lots: list, cash: float, base_assets: float, cfg: dict,
                 qty = float(int(qty))
             buy["qty"] = qty
             buy["cost"] = qty * px * (1 + fee)
+            buy["기준가"] = px
+            # 정수주로 살 때만 잔돈이 남는다. 소수점 매수가 되면 기본 주문이
+            # 이미 예산을 딱 맞게 쓰므로 사다리가 필요 없다.
+            if cfg.get("whole_shares", True):
+                buy["사다리"] = build_ladder(
+                    budget, px, qty,
+                    rungs=cfg.get("ladder_rungs", 0),
+                    step=cfg.get("ladder_step", 0.03),
+                    fee=fee,
+                )
 
     return {
         "강제매도": forced,
