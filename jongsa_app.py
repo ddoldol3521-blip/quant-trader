@@ -19,18 +19,42 @@ import streamlit as st
 from src.data.kr_data import get_dividends, get_kr_ohlcv
 from src.jongsa_backtest import run_buy_and_hold, run_jongsa
 from src.jongsa_live import BUY_RANGE_SKIPS_15Y, BUY_RANGE_VS_NOLIMIT, PRESETS, SELL_DAY_MODES
-from src.jongsa_live import (
-    CANDIDATE_STRATEGIES,
-    apply_preset,
-    is_shared_server,
-    load_config,
-    save_config,
-)
+from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
 from src.jongsa_live import make_held_counter, order_plan, target_price_for
 from src.jongsa_notify import build_message, send_now
 from src.scheduler import (JONGSA_TASK_NAME, get_jongsa_task_status, load_jongsa_notify_config,
                            register_jongsa_task, remove_jongsa_task, save_jongsa_notify_config)
 from src.telegram_notify import find_chat_id, load_telegram_config, save_telegram_config
+
+
+# 비교 탭 전용 연구 후보. 배포 서버가 모듈 두 개를 서로 다른 시점의 버전으로
+# 읽더라도 앱이 깨지지 않도록 화면에서 사용하는 정적 결과는 이 파일에 둔다.
+CANDIDATE_STRATEGIES = {
+    "RSI16 안정형": {
+        "CAGR": 37.62460459933084, "MDD": -40.33938974930615,
+        "CAGR_gain": 0.46258271608987656, "MDD_change": 0.06402278538431005,
+        "entries": 31, "status": "강건성 검증 통과",
+        "rule": "SOXX 150일 추세와 SOXL RSI16을 보고 큰 하락 때만 소액 보조매수",
+    },
+    "RSI14 성장형": {
+        "CAGR": 37.69109709558733, "MDD": -40.33527508580756,
+        "CAGR_gain": 0.5290752123463704, "MDD_change": 0.06813744888290074,
+        "entries": 36, "status": "성장 우선 후보",
+        "rule": "RSI16 안정형보다 RSI 반응을 빠르게 해 보조매수 기회를 늘림",
+    },
+    "SafeA": {
+        "CAGR": 37.3345710627633, "MDD": -40.33797444269134,
+        "CAGR_gain": 0.17254917952234194, "MDD_change": 0.06543809199911976,
+        "entries": 11, "status": "단순·보수 후보",
+        "rule": "전일 대비 -11% 급락과 RSI14 35 이하가 겹칠 때만 1% 보조매수",
+    },
+    "Stochastic 보강형": {
+        "CAGR": 37.74079121586493, "MDD": -40.27492629678624,
+        "CAGR_gain": 0.5787693326239705, "MDD_change": 0.12848623790421954,
+        "entries": 31, "status": "신규 후보",
+        "rule": "RSI16 안정형에 SOXX 14일 Stochastic K<20이면 보조매수 비중을 2%로 확대",
+    },
+}
 
 st.set_page_config(page_title="SOXL 퀀트믹스", page_icon="🔁", layout="wide")
 
