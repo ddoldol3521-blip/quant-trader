@@ -28,6 +28,25 @@ from src.telegram_notify import find_chat_id, load_telegram_config, save_telegra
 
 st.set_page_config(page_title="SOXL 퀀트믹스", page_icon="🔁", layout="wide")
 
+
+def preset_index(name: str) -> int:
+    """프리셋 목록에서 그 이름의 자리. 없으면 0(첫 번째).
+
+    예전에는 list(PRESETS.keys()).index(name) 을 그대로 썼다. 이름이 하나만
+    어긋나도 ValueError 가 나면서 **앱 전체가 흰 화면**이 됐다.
+
+    실제로 그랬다. 프리셋 이름을 "표준 (10%) ★추천" 에서 "균형형 ⭐ 추천" 으로
+    바꾸고 배포했더니, Streamlit Cloud 가 jongsa_app.py 만 다시 읽고
+    src/jongsa_live.py 는 예전 것을 메모리에 들고 있었다. 새 앱이 옛 목록에서
+    새 이름을 찾다가 죽었다.
+
+    이름이 바뀌었다고 앱이 통째로 못 뜨면 안 된다. 못 찾으면 첫 번째를 고른다.
+    """
+    try:
+        return list(PRESETS.keys()).index(name)
+    except ValueError:
+        return 0
+
 # 여백을 줄여 화면을 꽉 채운다. 스트림릿 기본값은 위아래 패딩이 크다.
 st.markdown(
     """
@@ -413,7 +432,7 @@ with tab_home:
         quick_preset = st.selectbox(
             "어떤 방식으로 운용할까요?",
             list(PRESETS.keys()),
-            index=list(PRESETS.keys()).index("균형형 ⭐ 추천"),
+            index=preset_index("균형형 ⭐ 추천"),
             key="quick_preset",
             help="검증된 조합을 고른 뒤 오른쪽 버튼을 누르면 모든 전략값이 한 번에 적용됩니다.",
         )
@@ -1063,7 +1082,7 @@ with tab_year:
         with p1:
             bt_preset = st.selectbox(
                 "시험할 전략 선택", list(PRESETS.keys()),
-                index=list(PRESETS.keys()).index("균형형 ⭐ 추천"),
+                index=preset_index("균형형 ⭐ 추천"),
                 key="bt_preset",
             )
         with p2:
