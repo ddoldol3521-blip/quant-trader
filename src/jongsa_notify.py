@@ -72,6 +72,13 @@ def settings() -> dict:
         "moc_available": cfg["moc_available"],
         "ladder_rungs": env("JONGSA_LADDER_RUNGS", cfg.get("ladder_rungs", 0), int),
         "ladder_step": env("JONGSA_LADDER_STEP", cfg.get("ladder_step", 0.03) * 100, float) / 100,
+        # 손실 리셋. 이 둘이 빠져 있어서 **앱과 텔레그램이 서로 다른 주문**을
+        # 안내했다. 화면은 "83주만 파세요", 알림은 "100주 전량 파세요" 였다.
+        # 설정을 새로 만들 때는 알림 쪽에도 반드시 같이 넣어야 한다.
+        "loss_reset_pct": env(
+            "JONGSA_LOSS_RESET", cfg.get("loss_reset_pct", 0.0) * 100, float) / 100,
+        "loss_reset_threshold_pct": env(
+            "JONGSA_LOSS_THRESHOLD", cfg.get("loss_reset_threshold_pct", 0.0) * 100, float) / 100,
     }
 
 
@@ -91,6 +98,8 @@ def build_message(today: date = None) -> str:
         sell_day_buy_mode=s["sell_day_buy_mode"], reinvest=s["reinvest"],
         buy_range_pct=rng, dividends=get_dividends(ticker, s["start"], today.isoformat()),
         ladder_rungs=s["ladder_rungs"], ladder_step=s["ladder_step"],
+        loss_reset_pct=s["loss_reset_pct"],
+        loss_reset_threshold_pct=s["loss_reset_threshold_pct"],
     )
 
     last = res.daily_log.iloc[-1]
@@ -137,6 +146,8 @@ def build_message(today: date = None) -> str:
         whole_shares=s["whole_shares"], buy_range_pct=rng,
         moc_available=s["moc_available"], _last_close=price,
         ladder_rungs=s["ladder_rungs"], ladder_step=s["ladder_step"],
+        loss_reset_pct=s["loss_reset_pct"],
+        loss_reset_threshold_pct=s["loss_reset_threshold_pct"],
     )
     # 배당은 하루 매수금 기준액에서 뺀다 (재투자하지 않으므로)
     plan = order_plan(res.final_lots, res.final_cash, total - res.total_dividends, plan_cfg,
@@ -146,8 +157,29 @@ def build_message(today: date = None) -> str:
     L.append("【오늘 넣을 주문】")
     if not forced and not pending and not buy["type"]:
         L.append("· 넣을 주문 없음")
-    for od in forced:
-        L.append(f"🛑 MOC 매도 {od['qty']:,.0f}주  (손절일 도래 · {od['보유영업일']}영업일)")
+
+    # 손실 리셋이 걸린 날은 **전량이 아니라 순매도 하나**만 낸다.
+    # 이 분기가 없으면 화면은 "83주만" 이라 하고 알림은 "100주 전량" 이라 한다.
+    # 실제로 그렇게 갈라져 있었다.
+    reset = plan.get("손실리셋")
+    if reset:
+        th = reset.get("손실문턱", 0.0)
+        L.append(
+            f"🔄 손절일 물량 {reset['전량수량']:,.0f}주가 전부 어제 종가 기준 손실"
+            + (f" (각각 −{th*100:.1f}% 이하)" if th else "")
+        )
+        if reset["팔수량"] > 0:
+            L.append(f"🛑 MOC 매도 {reset['팔수량']:,.0f}주  ← **이것만** 주문하세요")
+        else:
+            L.append("· 매도 없음 — 전량 그대로 둡니다")
+        L.append(
+            f"   남기는 {reset['남길수량']:,.0f}주는 새로 사는 게 아니라 "
+            f"**갖고 있던 것을 안 파는 것**입니다 (전일 총자산의 {reset['유지비율']*100:.1f}%)."
+        )
+        L.append("   수수료 없고 취득단가도 그대로. 오늘 종가부터 다시 셉니다.")
+    else:
+        for od in forced:
+            L.append(f"🛑 MOC 매도 {od['qty']:,.0f}주  (손절일 도래 · {od['보유영업일']}영업일)")
     for od in pending:
         L.append(f"🎯 LOC 매도 {od['qty']:,.0f}주 @ ${od['target_price']:,.2f}  ({od['보유영업일']}일차)")
     if buy["type"] == "LOC":

@@ -1,4 +1,4 @@
-"""종사종팔 V5 전용 앱.
+"""SOXL 퀀트믹스 전용 앱.
 
 핵심 발상: **시작일만 정하면 규칙이 나머지를 전부 결정한다.**
 그래서 매매를 하나하나 기록할 필요가 없다. 설정값만 넣으면
@@ -9,6 +9,7 @@ import sys
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -25,7 +26,7 @@ from src.scheduler import (JONGSA_TASK_NAME, get_jongsa_task_status, load_jongsa
                            register_jongsa_task, remove_jongsa_task, save_jongsa_notify_config)
 from src.telegram_notify import find_chat_id, load_telegram_config, save_telegram_config
 
-st.set_page_config(page_title="종사종팔 V5", page_icon="🔁", layout="wide")
+st.set_page_config(page_title="SOXL 퀀트믹스", page_icon="🔁", layout="wide")
 
 # 여백을 줄여 화면을 꽉 채운다. 스트림릿 기본값은 위아래 패딩이 크다.
 st.markdown(
@@ -159,9 +160,25 @@ if "cfg" not in st.session_state:
     st.session_state.cfg = cfg_from_url(load_config())
 cfg = st.session_state.cfg
 
-# 원 작성자가 공유한 V5 규칙을, 처음 하는 사람이 읽을 수 있게 옮긴 것.
+# 모든 프리셋이 공유하는 실행 원칙. 숫자와 리셋 규칙은 현재 설정에 맞춰 바뀐다.
 RULES_MD = """
-### 하루에 딱 두 가지만 봅니다
+### 현재 적용된 전략
+
+**{tgt}% 오르면 매도 · 최대 {stop}거래일 보유 · 하루에 자산의 {pct}%씩 신규 매수 · 하루 급등 +{rng}% 초과 시 매수 안 함**
+
+{reset_md}
+
+> **아주 쉽게 말하면:** 매일 돈을 조금씩 나눠 SOXL을 사고, 조금 오르면 팝니다. 오래 들고도 오르지 않은 물량은 {stop}번째 거래일에 정리합니다. 크게 떨어진 경우에는 반등에 대비해 정해진 만큼만 남길 수 있습니다.
+
+**용어를 먼저 알아두세요.**
+
+- **익절**: 산 가격보다 올라 이익을 보고 파는 것
+- **기간 청산**: {stop}거래일 동안 목표에 못 가면 정해진 규칙대로 정리하는 것
+- **손실 물량 일부 남기기**: 오래된 손실 물량을 전부 팔지 않고 정해진 만큼만 남긴 뒤 보유기간을 다시 시작하는 것
+- **LOC**: 정해둔 가격 조건을 만족할 때만 종가로 체결되는 주문
+- **MOC**: 가격 조건 없이 그날 종가로 체결되는 주문
+
+### 하루에 확인할 것
 
 **① 팔 것이 있나** → **② 없으면 산다.** 이게 전부입니다.
 
@@ -172,22 +189,22 @@ RULES_MD = """
 | | 언제 | 주문 |
 |---|---|---|
 | 🎯 **익절** | 산 가격보다 **{tgt}% 위**로 종가가 마감되면 | **LOC 매도** (목표가 지정) |
-| 🛑 **손절** | 산 지 **{stop}영업일**이 되면 (가격 무관) | **MOC 매도** (무조건 체결) |
+| ⏳ **기간 청산** | 산 지 **{stop}영업일**이 되면 | 기본은 **MOC 매도**, 조건 충족 시 손실 리셋 |
 
-**손절일 세는 법** — 달력 날짜가 아니라 **장 열린 날**로 셉니다.
+**청산일 세는 법** — 달력 날짜가 아니라 **장 열린 날**로 셉니다.
 
 ```
 1월 3일 매수 체결   → 0일  (산 날은 0일)
 1월 6일             → 1일  (다음 거래일부터 1일)
    ...
-1월 17일            → 10일 ← 이날 MOC 매도
+청산일              → {stop}일 ← 이날 기간 청산
 ```
 
 주말·공휴일은 안 셉니다.
 
 ---
 
-### 2) 살 것 — 하루 **{pct}%** ({splits}분할)
+### 2) 살 것 — 하루 총자산의 **{pct}%** (약 {splits}분할)
 
 **매수는 항상 LOC입니다. MOC는 매도에만 씁니다.**
 지정가를 무엇으로 잡느냐만 두 가지로 갈립니다.
@@ -207,60 +224,114 @@ RULES_MD = """
 >
 > 주문 하나로 **매수와 매도 중 하나만** 일어납니다.
 
-**매수 범위란** — 팔 물량이 없는 날엔 위 장치를 쓸 수 없으니, 대신 "어제보다 {rng}% 넘게 오른 날은 안 산다"는 상한을 둡니다. 카페에서는 **+5~10%** 를 씁니다.
+**급등 시 매수 제한이란** — 팔 물량이 없는 날엔 위 장치를 쓸 수 없으니, 대신 "어제보다 {rng}% 넘게 오른 날은 신규 매수를 건너뛴다"는 안전장치를 둡니다. 추천 프리셋은 **+10%**입니다.
 
-**손절일({stop}영업일)이 걸린 날**은 가격과 무관하게 무조건 파는 날이라, **매수 주문을 아예 넣지 않습니다.** 날짜만 보면 미리 알 수 있어요.
+**기간 청산일({stop}영업일)이 걸린 날**은 **일반 신규 매수를 하지 않습니다.** 손실 리셋이 발동해도 기존 물량 일부를 남길 뿐, 새로 사는 것은 아닙니다.
 
 > 💡 **LOC 지정가는 '살 가격'이 아니라 '살지 말지의 기준'입니다.**
 > 실제 체결은 언제나 **그날 종가**로 됩니다. 지정가 $126에 걸어도 종가가 $115면 $115에 삽니다.
 
 ---
 
-### 3) 몇 분할로 할까
-
-| 분할 | 하루 매수 | 누구에게 |
-|---|---|---|
-| **10분할** | 총자산의 10% | **기본값. 처음이면 여기서 시작** |
-| 7분할 | 약 14% | 익숙해진 뒤 |
-| 5분할 | 20% | 원문 표현으로 "용감하면" |
-
-10분할이 기본인 이유: 매도하는 날은 안 사기 때문에 시드가 다 소진되는 일이 잘 없습니다.
-
----
-
-### 4) 복리 — V5는 **100% 복리**입니다
+### 3) 매수금 계산
 
 번 돈도 잃은 돈도 **전부 다음 매수금에 반영**합니다.
 어제 마감 총자산의 {pct}%를 오늘 삽니다. 계산이 제일 단순합니다.
 
-(앱의 **수익 재투자 ⭕** 가 이 방식입니다)
-
----
-
-### 5) 퉁치기? V5는 신경 안 써도 됩니다
-
-매수가를 매도가보다 높게 걸 일이 없어서 **같은 날 사고파는 일이 안 생깁니다.**
-(V3에서만 생기는 문제입니다)
-
----
-
-### 📌 원문 기준 성적
-
-**CAGR 약 30% / MDD 약 -30%**
-
-MDD -30%는 **한때 내 돈이 30% 줄어드는 구간이 있었다**는 뜻입니다.
-{ticker}가 3배 레버리지라 실제로 그런 구간이 여러 번 있었습니다.
+(앱에서 **수익 재투자 ⭕**이면 어제 총자산을 기준으로 계산하고, 끄면 넣은 원금을 기준으로 계산합니다.)
 
 ---
 
 ### ⛔ 절대 하면 안 되는 것
 
 - 목표가 왔는데 "더 오를 것 같아서" 안 팔기
-- 손절일인데 "곧 오를 것 같아서" 안 팔기
+- 기간 청산 또는 순매도 수량을 임의로 바꾸기
 - 무서워서 중간에 다 팔아버리기
 
 **이걸 어기면 위 성적은 아무 의미가 없습니다.**
 """
+
+
+def reset_rule_markdown(config: dict) -> str:
+    """현재 프리셋의 손실 리셋 규칙을 도움말용 문장으로 만든다."""
+    retain = float(config.get("loss_reset_pct", 0.0)) * 100
+    threshold = float(config.get("loss_reset_threshold_pct", 0.0)) * 100
+    if retain <= 0:
+        return "**손실 물량 일부 남기기: 사용 안 함** — 보유기간이 끝나면 해당 물량을 전부 팝니다."
+    condition = (
+        f"모든 만기 물량이 전일 종가 기준 각각 **-{threshold:g}% 이하**일 때"
+        if threshold > 0 else
+        "모든 만기 물량이 전일 종가 기준 손실일 때"
+    )
+    return (
+        f"**크게 손실일 때 일부 남기기:** {condition} 전부 팔지 않고, 전일 총자산의 "
+        f"**{retain:g}%에 해당하는 기존 수량만 남긴 뒤** 나머지를 순매도합니다. "
+        "이는 매도 후 재매수가 아니며 신규 매수도 아닙니다. 조건을 충족하지 않으면 전량 청산합니다."
+    )
+
+
+def preset_result_caption(preset: dict) -> str:
+    """CAGR/MDD를 처음 보는 사람도 이해할 수 있는 표현으로 바꾼다."""
+    return (
+        f"과거 전체 백테스트: 1년 복리수익률로 환산하면 **{preset['CAGR']:.2f}%**, "
+        f"가장 힘들었던 구간에는 자산이 고점에서 **{abs(preset['MDD']):.2f}% 감소**했습니다. "
+        "미래에도 같은 결과가 나온다는 뜻은 아닙니다."
+    )
+
+
+def show_loss_reset_example(config: dict) -> None:
+    """손실 물량 일부 남기기를 숫자로 풀어 보여주는 초보자용 예시."""
+    retain = float(config.get("loss_reset_pct", 0.0)) * 100
+    threshold = float(config.get("loss_reset_threshold_pct", 0.0)) * 100
+    stop = int(config.get("stop_days", 16))
+    with st.expander("💡 예시 ▶ 클릭해서 실제 계산 보기"):
+        if retain <= 0:
+            st.markdown(
+                f"이 설정은 일부 남기기를 사용하지 않습니다. 산 지 **{stop}거래일**이 된 물량은 "
+                "목표수익에 도달하지 못했으면 **전부 팝니다.**"
+            )
+            return
+
+        account = 20_000
+        price = 100
+        old_shares = 100
+        keep_value = account * retain / 100
+        keep_shares = int(keep_value / price)
+        sell_shares = old_shares - keep_shares
+        condition = (
+            f"{stop}일 된 물량이 모두 각각 **-{threshold:g}% 이상 손실**"
+            if threshold > 0 else f"{stop}일 된 물량이 모두 손실"
+        )
+        st.markdown(
+            f"""
+다음 상황이라고 가정합니다.
+
+- 현금과 주식을 합친 계좌 전체: **${account:,}**
+- 산 지 {stop}거래일 된 SOXL: **{old_shares}주**
+- 현재 SOXL 가격: **${price}**
+- 오래된 물량 상태: {condition}
+
+**1단계 — 얼마를 남길지 계산**
+
+계좌 ${account:,} × {retain:g}% = **${keep_value:,.0f}어치**를 남깁니다.
+
+**2단계 — 주식 수로 바꾸기**
+
+${keep_value:,.0f} ÷ 현재가 ${price} = **{keep_shares}주를 그대로 보유**합니다.
+
+**3단계 — 나머지만 매도**
+
+기존 {old_shares}주 − 남길 {keep_shares}주 = **{sell_shares}주 매도**
+
+> 최종 주문은 **{sell_shares}주 매도** 하나입니다.
+>
+> {keep_shares}주는 원래 가지고 있던 주식을 그냥 남기는 것이며, 새로 사는 주문은 없습니다.
+
+**반대로 손실 조건을 충족하지 않으면** {old_shares}주를 전부 팝니다.
+
+예를 들어 손실 기준이 -{threshold:g}%인데 오래된 물량 중 하나라도 -5%라면 일부 남기기를 사용하지 않습니다.
+"""
+        )
 
 if "flows" not in st.session_state:
     st.session_state.flows = flows_from_url()
@@ -268,7 +339,16 @@ if "flows" not in st.session_state:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_price_history(ticker: str, start: str, end: str) -> pd.DataFrame:
-    return get_kr_ohlcv(ticker, start, end)
+    hist = get_kr_ohlcv(ticker, start, end)
+    # 미국장은 한국 날짜로 다음 날 새벽까지 진행된다. yfinance/FDR가 장중인
+    # 미국 당일 봉을 돌려주더라도 그것은 아직 확정 종가가 아니므로 매매가
+    # 체결된 것으로 계산하면 안 된다. 미국장 마감 뒤에만 해당 봉을 포함한다.
+    if hist is not None and len(hist) and not (ticker.isdigit() and len(ticker) == 6):
+        ny_now = datetime.now(ZoneInfo("America/New_York"))
+        last_date = pd.Timestamp(hist.index[-1]).date()
+        if last_date == ny_now.date() and ny_now.time() < dtime(16, 0):
+            hist = hist.iloc[:-1]
+    return hist
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -279,7 +359,8 @@ def load_dividends(ticker: str, start: str, end: str) -> pd.Series:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode,
-             reinvest, flows, buy_range=None, ladder_rungs=0, ladder_step=0.03):
+             reinvest, flows, buy_range=None, ladder_rungs=0, ladder_step=0.03,
+             loss_reset=0.0, loss_reset_threshold=0.0):
     """시작일부터 오늘까지 규칙대로 돌린다. 설정이 같으면 캐시에서 바로 나온다.
 
     today를 인자로 받는 이유: 캐시 키에 날짜가 들어가야 날이 바뀌는 순간
@@ -297,6 +378,8 @@ def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole,
         sell_day_buy_mode=mode, reinvest=reinvest, cash_flows=list(flows),
         buy_range_pct=buy_range, dividends=div,
         ladder_rungs=ladder_rungs, ladder_step=ladder_step,
+        loss_reset_pct=loss_reset,
+        loss_reset_threshold_pct=loss_reset_threshold,
     )
     bh = run_buy_and_hold(
         hist, initial_cash=cash, fee_rate=fee, whole_shares=whole,
@@ -305,7 +388,7 @@ def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole,
     return res, hist, bh
 
 
-st.markdown("# 🔁 종사종팔 V5")
+st.markdown("# 🔁 SOXL 퀀트믹스")
 if is_shared_server():
     st.caption(
         "SOXL 분할매매 계산기입니다. **투자 자문이 아니고 수익을 보장하지 않습니다.** "
@@ -313,8 +396,8 @@ if is_shared_server():
         "이 설정 그대로 뜹니다 (주소창을 보면 설정값이 붙어 있습니다)."
     )
 
-tab_home, tab_grid, tab_year, tab_help, tab_notify = st.tabs(
-    ["📅 오늘 할 일 (주문 시트)", "📋 일별 기록", "📊 백테스트", "📖 규칙 · 설정", "🔔 알림"]
+tab_home, tab_grid, tab_year, tab_compare, tab_help, tab_notify = st.tabs(
+    ["📅 오늘 주문", "📋 매매 기록", "📊 과거 성과 시험", "🏆 전략별 성과 비교", "📖 사용법 · 설정", "🔔 알림"]
 )
 
 # ============================================================ 오늘 할 일
@@ -325,6 +408,24 @@ ready = True
 with tab_home:
     # ============================================================ 설정 (맨 위)
 
+    quick1, quick2 = st.columns([3, 1])
+    with quick1:
+        quick_preset = st.selectbox(
+            "어떤 방식으로 운용할까요?",
+            list(PRESETS.keys()),
+            index=list(PRESETS.keys()).index("균형형 ⭐ 추천"),
+            key="quick_preset",
+            help="검증된 조합을 고른 뒤 오른쪽 버튼을 누르면 모든 전략값이 한 번에 적용됩니다.",
+        )
+    with quick2:
+        st.write("")
+        if st.button("이 전략 적용", type="primary", width="stretch", key="quick_apply"):
+            apply_preset(cfg, quick_preset)
+            st.rerun()
+    st.caption(PRESETS[quick_preset]["설명"])
+    st.caption(preset_result_caption(PRESETS[quick_preset]))
+    st.caption("🔬 **SOXL 약 15.5년 · 약 29.5만 설정 조합 · 누적 31만 회 이상 시뮬레이션에서 선별**")
+    st.info("**사용 순서:** ① 전략 선택 → ② `이 전략 적용` → ③ 아래에 표시된 오늘 주문을 증권사 앱에 입력")
 
     r1c1, r1c2, r1c3, r1c4 = st.columns([1, 1.1, 1, 1.2])
     with r1c1:
@@ -332,9 +433,9 @@ with tab_home:
     with r1c2:
         seed = st.number_input("시드 ($)", 100.0, value=float(cfg.get("initial_cash", 10000.0)), step=1000.0)
     with r1c3:
-        splits = st.number_input(
-            "분할수", 2, 60, int(round(1 / cfg.get("daily_buy_pct", 0.10))),
-            help="하루에 총자산의 1/분할수 만큼 산다. 10분할 = 10%. 추천은 10분할.",
+        daily_buy_pct = st.number_input(
+            "하루에 새로 살 금액 (%)", 1.0, 50.0, float(cfg.get("daily_buy_pct", 0.10) * 100), 0.5,
+            help="예: 10%는 어제 계좌가 $20,000이면 오늘 최대 $2,000어치를 새로 산다는 뜻입니다.",
         )
     with r1c4:
         # 상한을 넉넉히 잡아 막지 않는다. 기간이 너무 짧으면 아래 계산에서
@@ -345,9 +446,9 @@ with tab_home:
 
     r2c1, r2c2, r2c3, r2c4 = st.columns([1, 1, 1, 1.2])
     with r2c1:
-        tgt_pct = st.number_input("목표수익률 (%)", 0.5, 20.0, cfg.get("target_return", 0.0275) * 100, 0.05)
+        tgt_pct = st.number_input("몇 % 오르면 팔까요?", 0.5, 20.0, cfg.get("target_return", 0.0275) * 100, 0.05)
     with r2c2:
-        stop_days = st.number_input("청산 영업일", 2, 60, int(cfg.get("stop_days", 10)))
+        stop_days = st.number_input("최대 몇 거래일 보유할까요?", 2, 60, int(cfg.get("stop_days", 10)))
     with r2c3:
         fee_pct = st.number_input("수수료 (%)", 0.0, 1.0, cfg.get("fee_rate", 0.0) * 100, 0.001, format="%.4f")
     with r2c4:
@@ -358,11 +459,12 @@ with tab_home:
             horizontal=True,
         )
 
-    daily_pct = 1 / splits
-    rec = "  ✅ **추천 설정**" if splits == 10 and abs(tgt_pct - 2.75) < 0.01 and stop_days == 10 else ""
+    daily_pct = daily_buy_pct / 100
+    splits = max(1, int(round(1 / daily_pct)))
+    rec = "  ✅ **추천 프리셋**" if abs(daily_buy_pct - 10.0) < 0.01 and abs(tgt_pct - 2.70) < 0.01 and stop_days == 16 else ""
     st.caption(
         f"하루 매수금 = {'어제 총자산' if reinvest else '넣은 돈'}의 **{daily_pct*100:.1f}%** "
-        f"({splits}분할) · 목표 **+{tgt_pct:.2f}%** 도달 시 매도 · **{stop_days}영업일** 지나면 무조건 매도{rec}"
+        f"(약 {splits}분할) · 목표 **+{tgt_pct:.2f}%** 도달 시 매도 · **{stop_days}영업일** 지나면 무조건 매도{rec}"
     )
 
     # ---------- 중간 입출금 ----------
@@ -432,6 +534,8 @@ with tab_home:
                 cfg.get("sell_day_buy_mode", "never"), bool(reinvest), flow_tuples,
                 cfg.get("buy_range_pct", 0.10),
                 int(cfg.get("ladder_rungs", 0)), float(cfg.get("ladder_step", 0.03)),
+                float(cfg.get("loss_reset_pct", 0.0)),
+                float(cfg.get("loss_reset_threshold_pct", 0.0)),
             )
     except Exception as e:
         ready = False   # 아래 탭들이 쓸 계산 결과가 없다는 뜻
@@ -527,7 +631,9 @@ with tab_home:
                 tgt=f"{tgt_pct:.2f}", stop=int(stop_days), splits=int(splits),
                 pct=f"{daily_pct*100:.1f}", ticker=ticker,
                 rng=f"{cfg.get('buy_range_pct', 0.10)*100:.0f}",
+                reset_md=reset_rule_markdown(cfg),
             ))
+            show_loss_reset_example(cfg)
 
 if ready:
   with tab_home:
@@ -580,7 +686,7 @@ if ready:
     cagr_txt = "연평균 —" if short_period else f"연평균 {res.cagr_pct:.1f}%"
     st.caption(
         f"**{start_d} → {price_date}** 기준 · 거래일 {len(log)}일 · "
-        f"매매 {res.num_trades}회 (익절 {res.num_target_sells} / 손절 {res.num_forced_sells}) · "
+        f"매매 {res.num_trades}회 (목표수익 매도 {res.num_target_sells} / 기간종료 매도 {res.num_forced_sells}) · "
         f"승률 {res.win_rate_pct:.1f}% · **{cagr_txt} · 최대낙폭 {res.mdd_pct:.1f}%**"
         + ("  (연평균·최대낙폭은 입출금 효과를 뺀 전략 자체의 성적입니다)" if has_flows else "")
     )
@@ -589,7 +695,7 @@ if ready:
             f"**아직 {len(log)}거래일밖에 안 됐습니다.** 총자산·손익은 정확하지만, "
             f"연평균 수익률은 기간이 짧으면 뻥튀기돼서 표시하지 않습니다 "
             f"(약 3개월 지나면 나옵니다). 지금은 **오늘 할 일**만 보시면 됩니다."
-            + (f" 청산 {stop_days}영업일이 아직 한 번도 안 지나 손절 기록이 없을 수 있습니다."
+            + (f" 최대 보유기간 {stop_days}거래일이 아직 지나지 않아 기간종료 매도가 없을 수 있습니다."
                if len(log) <= int(stop_days) else "")
         )
     st.caption(
@@ -621,7 +727,7 @@ if ready:
                     "수량": f"{s['qty']:,.0f}주",
                     "매수일": s["buy_date"],
                     "매수가": f"${s['buy_price']:.2f}",
-                    "사유": f"{s['보유영업일']}영업일 경과 — 손절일",
+                    "사유": f"{s['보유영업일']}거래일 경과 — 보유기간 종료",
                 })
             for s in pending:
                 rows.append({
@@ -633,10 +739,29 @@ if ready:
                     "사유": f"{s['보유영업일']}일차 · 종가가 지정가 이상이면 체결",
                 })
             st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-            if forced:
+            reset = plan.get("손실리셋")
+            if reset:
+                # 리셋이 걸린 날은 위 표의 '전량 매도'가 아니라 순매도 하나만 낸다.
+                # 표를 그대로 두고 여기서 덮어써 알려준다 — 표에는 '어느 건이
+                # 손절일인지'가 나와 있어서 지우면 확인할 방법이 없어진다.
+                if reset["팔수량"] > 0:
+                    st.warning(
+                        f"### ⚠️ 위 표 대신 **{reset['팔수량']:,.0f}주만** MOC 매도하세요\n\n"
+                        f"{reset['설명']}\n\n"
+                        f"남기는 {reset['남길수량']:,.0f}주는 **팔지 않으므로 수수료가 없고**, "
+                        "증권사 취득단가도 그대로입니다. 오늘 종가가 새 기준이 되어 "
+                        "보유일과 목표가만 다시 시작합니다."
+                    )
+                else:
+                    st.success(
+                        f"### ✅ 오늘은 **팔 것이 없습니다**\n\n{reset['설명']}\n\n"
+                        f"보유기간이 끝났지만 남길 수량"
+                        f"({reset['남길수량']:,.0f}주)이 보유량 전부라 매도 주문을 내지 않습니다."
+                    )
+            elif forced:
                 st.error(
                     f"**{sum(s['qty'] for s in forced):,.0f}주는 오늘 무조건 팔립니다** "
-                    f"(손절일 도래). 가격이 얼마든 팝니다."
+                    f"(최대 보유기간 도래). 가격과 관계없이 팝니다."
                 )
             if pending:
                 st.caption(
@@ -851,12 +976,12 @@ def show_result(r, h, bh, tk, put, label):
     m = st.columns(5)
     m[0].metric("최종 자산", f"${r.final_value:,.0f}")
     m[1].metric("총 수익률", f"{r.net_return_pct:+.1f}%")
-    m[2].metric("연평균(CAGR)", "—" if short else f"{r.cagr_pct:.2f}%")
-    m[3].metric("최대 낙폭(MDD)", f"{r.mdd_pct:.2f}%")
-    m[4].metric("효율 (CAGR/MDD)",
+    m[2].metric("연복리 수익률", "—" if short else f"{r.cagr_pct:.2f}%", help="전체 성과를 1년 복리수익률로 환산한 값입니다.")
+    m[3].metric("고점 대비 최대 감소", f"{r.mdd_pct:.2f}%", help="과거 가장 힘든 순간에 계좌가 직전 최고점에서 얼마나 줄었는지 보여줍니다.")
+    m[4].metric("수익/위험 비율",
                 "—" if (short or not r.mdd_pct) else f"{r.cagr_pct / -r.mdd_pct:.2f}")
     st.caption(
-        f"{label} · 매매 {r.num_trades}회 (익절 {r.num_target_sells} / 손절 {r.num_forced_sells})"
+        f"{label} · 매매 {r.num_trades}회 (목표수익 매도 {r.num_target_sells} / 기간종료 매도 {r.num_forced_sells})"
         f" · 승률 {r.win_rate_pct:.1f}% · 평균 주식비중 {r.avg_exposure_pct:.0f}%"
         + (f" · **매수 범위를 넘겨 건너뛴 날 {r.buy_range_skips}일**"
            if r.buy_range_skips else " · 매수 범위 때문에 건너뛴 날 없음")
@@ -920,14 +1045,52 @@ with tab_year:
         st.session_state.btcfg = {
             "ticker": cfg["ticker"], "start": "2011-01-03",
             "end": date.today().isoformat(), "seed": 10000.0,
-            "splits": 10, "tgt": 2.75, "stop": 10, "fee": 0.0, "reinvest": True,
+            "daily": 10.0, "tgt": 2.70, "stop": 16, "fee": 0.1, "reinvest": True,
             "range": cfg.get("buy_range_pct", 0.10) * 100,
+            "reset": 9.5, "threshold": 7.5, "mode": "never", "ladder": 0,
         }
     bt = st.session_state.btcfg
     bt.setdefault("end", date.today().isoformat())   # 예전 세션 대비
     bt.setdefault("range", cfg.get("buy_range_pct", 0.10) * 100)
+    bt.setdefault("daily", 100 / float(bt.get("splits", 10)))
+    bt.setdefault("reset", cfg.get("loss_reset_pct", 0.0) * 100)
+    bt.setdefault("threshold", cfg.get("loss_reset_threshold_pct", 0.0) * 100)
+    bt.setdefault("mode", cfg.get("sell_day_buy_mode", "never"))
+    bt.setdefault("ladder", cfg.get("ladder_rungs", 0))
 
     with bt1:
+        p1, p2 = st.columns([3, 1])
+        with p1:
+            bt_preset = st.selectbox(
+                "시험할 전략 선택", list(PRESETS.keys()),
+                index=list(PRESETS.keys()).index("균형형 ⭐ 추천"),
+                key="bt_preset",
+            )
+        with p2:
+            st.write("")
+            if st.button("이 조건으로 시험", type="primary", width="stretch", key="bt_preset_apply"):
+                _p = PRESETS[bt_preset]
+                _values = {
+                    "bt_tg": _p["target_return"] * 100,
+                    "bt_sv": int(_p["stop_days"]),
+                    "bt_dp": _p["daily_buy_pct"] * 100,
+                    "bt_rg": _p.get("buy_range_pct", 0.10) * 100,
+                    "bt_lr": _p.get("loss_reset_pct", 0.0) * 100,
+                    "bt_lt": _p.get("loss_reset_threshold_pct", 0.0) * 100,
+                }
+                bt.update({
+                    "tgt": _values["bt_tg"], "stop": _values["bt_sv"],
+                    "daily": _values["bt_dp"], "range": _values["bt_rg"],
+                    "reset": _values["bt_lr"], "threshold": _values["bt_lt"],
+                    "mode": _p.get("sell_day_buy_mode", "never"),
+                    "ladder": int(_p.get("ladder_rungs", 0)),
+                })
+                for _key in _values:
+                    st.session_state.pop(_key, None)
+                st.rerun()
+        st.caption(PRESETS[bt_preset]["설명"])
+        st.caption(preset_result_caption(PRESETS[bt_preset]))
+
         h1, h2 = st.columns([3, 1])
         with h1:
             st.caption(
@@ -939,10 +1102,16 @@ with tab_year:
                 st.session_state.btcfg = {
                     "ticker": ticker, "start": start_d.isoformat(),
                     "end": date.today().isoformat(), "seed": float(seed),
-                    "splits": int(splits), "tgt": float(tgt_pct), "stop": int(stop_days),
+                    "daily": float(daily_pct * 100), "tgt": float(tgt_pct), "stop": int(stop_days),
                     "fee": float(fee_pct), "reinvest": bool(reinvest),
                     "range": cfg.get("buy_range_pct", 0.10) * 100,
+                    "reset": cfg.get("loss_reset_pct", 0.0) * 100,
+                    "threshold": cfg.get("loss_reset_threshold_pct", 0.0) * 100,
+                    "mode": cfg.get("sell_day_buy_mode", "never"),
+                    "ladder": int(cfg.get("ladder_rungs", 0)),
                 }
+                for _key in ("bt_tk", "bt_dp", "bt_tg", "bt_sv", "bt_fe", "bt_rg", "bt_lr", "bt_lt"):
+                    st.session_state.pop(_key, None)
                 st.rerun()
 
         e1, e2, e3 = st.columns([1, 1, 1])
@@ -968,12 +1137,12 @@ with tab_year:
             bt["seed"] = st.number_input("시드 ($)", 100.0, value=float(bt["seed"]),
                                          step=1000.0, key="bt_sd")
         with e5:
-            bt["splits"] = st.number_input("분할수", 2, 60, int(bt["splits"]), key="bt_sp")
+            bt["daily"] = st.number_input("하루에 새로 살 금액 (%)", 1.0, 50.0, float(bt["daily"]), 0.5, key="bt_dp")
         with e6:
-            bt["tgt"] = st.number_input("목표수익률 (%)", 0.5, 20.0, float(bt["tgt"]),
+            bt["tgt"] = st.number_input("몇 % 오르면 팔까요?", 0.5, 20.0, float(bt["tgt"]),
                                         0.05, key="bt_tg")
         with e7:
-            bt["stop"] = st.number_input("청산 영업일", 2, 60, int(bt["stop"]), key="bt_sv")
+            bt["stop"] = st.number_input("최대 보유 거래일", 2, 60, int(bt["stop"]), key="bt_sv")
         with e8:
             bt["fee"] = st.number_input("수수료 (%)", 0.0, 1.0, float(bt["fee"]), 0.001,
                                         format="%.4f", key="bt_fe")
@@ -981,6 +1150,18 @@ with tab_year:
             bt["range"] = st.number_input(
                 "매수 범위 (%)", 3.0, 30.0, float(bt["range"]), 1.0, key="bt_rg",
                 help="팔 물량이 없는 날, 어제 종가보다 이만큼 넘게 오르면 사지 않습니다.",
+            )
+
+        r1, r2 = st.columns(2)
+        with r1:
+            bt["reset"] = st.number_input(
+                "크게 손실일 때 남겨둘 주식 (%)", 0.0, 20.0, float(bt["reset"]), 0.5, key="bt_lr",
+                help="보유기간이 끝난 손실 물량을 전부 팔지 않고, 계좌 총자산 기준으로 이만큼만 남깁니다. 새로 사는 것이 아닙니다."
+            )
+        with r2:
+            bt["threshold"] = st.number_input(
+                "얼마나 떨어졌을 때 일부를 남길까요? (%)", 0.0, 30.0, float(bt["threshold"]), 0.5, key="bt_lt",
+                help="7.5%라면 보유기간이 끝난 물량이 모두 각각 -7.5% 이하일 때만 일부를 남깁니다."
             )
 
         bt["reinvest"] = st.radio(
@@ -1003,8 +1184,8 @@ with tab_year:
             diffs.append(f"종료일 오늘 → {bt['end']}")
         if abs(bt["seed"] - seed) > 1e-9:
             diffs.append(f"시드 ${seed:,.0f} → ${bt['seed']:,.0f}")
-        if int(bt["splits"]) != int(splits):
-            diffs.append(f"{splits}분할 → {int(bt['splits'])}분할")
+        if abs(bt["daily"] - daily_pct * 100) > 1e-9:
+            diffs.append(f"일반 매수 {daily_pct*100:.1f}% → {bt['daily']:.1f}%")
         if abs(bt["tgt"] - tgt_pct) > 1e-9:
             diffs.append(f"목표 {tgt_pct:.2f}% → {bt['tgt']:.2f}%")
         if int(bt["stop"]) != int(stop_days):
@@ -1013,6 +1194,10 @@ with tab_year:
             diffs.append(f"재투자 {'O' if reinvest else 'X'} → {'O' if bt['reinvest'] else 'X'}")
         if abs(bt["range"] / 100 - cfg.get("buy_range_pct", 0.10)) > 1e-9:
             diffs.append(f"매수 범위 {cfg.get('buy_range_pct', 0.10)*100:.0f}% → {bt['range']:.0f}%")
+        if abs(bt["reset"] / 100 - cfg.get("loss_reset_pct", 0.0)) > 1e-9:
+            diffs.append(f"리셋 유지 {cfg.get('loss_reset_pct', 0)*100:.1f}% → {bt['reset']:.1f}%")
+        if abs(bt["threshold"] / 100 - cfg.get("loss_reset_threshold_pct", 0.0)) > 1e-9:
+            diffs.append(f"손실 문턱 {cfg.get('loss_reset_threshold_pct', 0)*100:.1f}% → {bt['threshold']:.1f}%")
 
         if diffs:
             st.caption("**내 설정과 다른 점** — " + " · ".join(diffs))
@@ -1023,10 +1208,13 @@ with tab_year:
             with st.spinner("돌리는 중..."):
                 br, bh_, bbh = simulate(
                     bt["ticker"], bt["start"], bt["end"], float(bt["seed"]),
-                    1 / int(bt["splits"]), bt["tgt"] / 100, int(bt["stop"]), bt["fee"] / 100,
+                    bt["daily"] / 100, bt["tgt"] / 100, int(bt["stop"]), bt["fee"] / 100,
                     cfg.get("fee_in_target", True), cfg.get("whole_shares", True),
-                    cfg.get("sell_day_buy_mode", "never"), bool(bt["reinvest"]), (),
+                    bt["mode"], bool(bt["reinvest"]), (),
                     bt["range"] / 100,
+                    int(bt["ladder"]), float(cfg.get("ladder_step", 0.03)),
+                    bt["reset"] / 100,
+                    bt["threshold"] / 100,
                 )
         except Exception as ex:
             st.error(f"백테스트 실패: {ex}  — 종목코드와 기간을 확인하세요.")
@@ -1035,8 +1223,9 @@ with tab_year:
             show_result(
                 br, bh_, bbh, bt["ticker"], float(bt["seed"]),
                 f"**{bt['ticker']}** {bt['start']} ~ {bh_.index[-1].date()} · "
-                f"시드 \\${bt['seed']:,.0f} · {int(bt['splits'])}분할 · 목표 {bt['tgt']:.2f}% · "
-                f"청산 {int(bt['stop'])}일 · {'복리' if bt['reinvest'] else '고정'}",
+                f"시드 \\${bt['seed']:,.0f} · 일반 매수 {bt['daily']:.1f}% · 목표 {bt['tgt']:.2f}% · "
+                f"청산 {int(bt['stop'])}일 · 리셋 {bt['reset']:.1f}% / 문턱 -{bt['threshold']:.1f}% · "
+                f"{'복리' if bt['reinvest'] else '고정'}",
             )
 
     # ---------- 내 설정 그대로 ----------
@@ -1057,17 +1246,94 @@ with tab_year:
         if has_flows:
             st.caption("연도별 수치는 입출금 효과를 뺀 값이고, 그래프는 실제 자산 금액입니다.")
 
+# ============================================================ 전략 비교
+with tab_compare:
+    st.markdown("## 🏆 추천 전략 백테스트 비교")
+    st.info(
+        "**약 294,900개 설정 조합에서 추린 추천 전략 5개입니다.** "
+        "기간분리·거래비용·실행방식·보조지표 검사를 합친 누적 시뮬레이션은 **31만 회 이상**입니다."
+    )
+    st.caption(
+        "SOXL 2011~2026 · 3,923거래일 · 시드 $10,000 · 정수주 · 편도 거래비용 0.1% 기준. "
+        "2011~2020 탐색 구간과 2021~2026 검증 구간을 별도로 확인했습니다."
+    )
+    with st.expander("🔍 무엇을 얼마나 검증했나요? — 클릭해서 보기"):
+        st.markdown(
+            """
+**검증 데이터**
+
+- SOXL 2011~2026, 총 **3,923거래일**
+- 2011~2020과 2021~2026을 나눠 한 시기에만 잘 맞는 조건인지 확인
+- 2011~2015·2016~2020·2021~2023·2024~2026 네 구간도 별도 점검
+
+**시험한 주요 조건**
+
+- 목표 매도폭, 최대 보유기간, 하루 신규 매수 비율
+- 큰 손실 때 남길 비율과 발동 하락 기준
+- 급등 시 매수 제한, 매도일 재매수, 추가 분할 주문
+- 편도 거래비용 **0.05%·0.10%·0.20%·0.30%**
+- SOXX/SOXL RSI, SOXX 200일 이동평균선, 20일 변동성
+- RSI에 따른 매수량 조절과 목표 매도가 조절
+
+**실제 주문을 고려한 계산**
+
+- 주문 시점에 알 수 있는 **전일 확정 데이터만 사용**
+- 신규 매수와 목표 매도는 LOC 조건을 충족할 때 그날 종가로 체결
+- 최대 보유기간 종료는 MOC로 그날 종가에 체결
+- 매수 수량은 당일 종가를 미리 사용하지 않고 전일 가격 또는 기존 목표가로 산정
+- 정수주와 편도 거래비용 0.1%를 기본 반영
+
+보조지표 전략까지 추가로 시험했지만 여러 기간과 비용 조건에서 현재 균형형을 확실하게 이기지 못해 기본 추천은 유지했습니다.
+"""
+        )
+        st.warning(
+            "많은 조합을 시험할수록 우연히 좋아 보이는 결과도 생깁니다. 후보 선정에 2021~2026 데이터도 일부 사용했으므로 "
+            "앞으로 새로 쌓이는 데이터가 진짜 미사용 검증 구간입니다. 백테스트는 미래 수익을 보장하지 않습니다."
+        )
+
+    _period_results = {
+        "안정형": (32.15, -36.55, 35.98, -36.02, 919373, "낙폭 우선 추천"),
+        "안정성장형": (33.76, -38.53, 38.00, -37.93, 1126825, "균형과 수익의 중간"),
+        "균형형 ⭐ 추천": (35.33, -40.40, 40.05, -39.85, 1368935, "종합 추천"),
+        "간편형": (33.39, -39.53, 40.56, -39.89, 1215928, "규칙이 가장 단순"),
+        "공격형": (38.10, -42.08, 43.50, -43.74, 1917506, "고수익·고위험"),
+    }
+    _compare_rows = []
+    for _name, _p in PRESETS.items():
+        _tr_c, _tr_m, _va_c, _va_m, _final, _role = _period_results[_name]
+        _compare_rows.append({
+            "전략": _name,
+            "목표": f"{_p['target_return']*100:.1f}%",
+            "청산": f"{_p['stop_days']}일",
+            "평소 하루 새로 사는 비율": f"{_p['daily_buy_pct']*100:g}%",
+            "큰 손실 때 남길 비율": f"{_p.get('loss_reset_pct', 0)*100:g}%",
+            "일부를 남기는 하락 조건": f"각 물량 -{_p.get('loss_reset_threshold_pct', 0)*100:g}% 이하" if _p.get("loss_reset_threshold_pct", 0) else "손실이면 적용",
+            "2011~20 연복리": f"{_tr_c:.2f}%",
+            "2021~26 연복리": f"{_va_c:.2f}%",
+            "전체 연복리 수익률": f"{_p['CAGR']:.2f}%",
+            "고점 대비 최대 감소": f"{_p['MDD']:.2f}%",
+            "$1만 최종자산": f"${_final:,.0f}",
+            "성격": _role,
+        })
+    st.dataframe(pd.DataFrame(_compare_rows), width="stretch", hide_index=True)
+    st.warning(
+        "'고점 대비 최대 감소'는 과거 가장 힘든 순간의 계좌 감소폭입니다. 실전에서는 이보다 더 큰 손실이 날 수 있으며, "
+        "후보 선정에 2021~2026 데이터도 사용했으므로 앞으로의 데이터가 진짜 미사용 검증 구간입니다."
+    )
+
 # ============================================================ 규칙 · 설정
 with tab_help:
     h1, h2 = st.columns([1, 1])
 
     with h1:
-        st.markdown("## 📖 종사종팔 V5 — 처음이면 이것만 읽으세요")
+        st.markdown("## 📖 SOXL 퀀트믹스 — 처음이면 이것만 읽으세요")
         st.markdown(RULES_MD.format(
             tgt=f"{tgt_pct:.2f}", stop=int(stop_days), splits=int(splits),
             pct=f"{daily_pct*100:.1f}", ticker=ticker,
             rng=f"{cfg.get('buy_range_pct', 0.10)*100:.0f}",
+            reset_md=reset_rule_markdown(cfg),
         ))
+        show_loss_reset_example(cfg)
         st.markdown("### ❓ LOC / MOC가 뭔가요")
         st.markdown(
             """
@@ -1075,33 +1341,48 @@ with tab_help:
 
 | | 뜻 | 언제 체결되나 | 여기서 쓰는 곳 |
 |---|---|---|---|
-| **MOC** | 종가 시장가 | **무조건 체결** | 손절 매도, 팔 게 없는 날의 매수 |
-| **LOC** | 종가 지정가 | 조건 맞을 때만 | 목표 매도, 매도 가능성 있는 날의 매수 |
+| **MOC** | 종가 시장가 | **무조건 체결** | 보유기간이 끝난 물량 매도 |
+| **LOC** | 종가 조건부 주문 | 조건 맞을 때만 | 매일 신규 매수, 목표수익 매도 |
 
 **LOC 방향이 헷갈리면**
 - **LOC 매도**: 종가가 지정가 **이상**이면 체결 (비싸게 팔고 싶으니까)
 - **LOC 매수**: 종가가 지정가 **이하**면 체결 (싸게 사고 싶으니까)
 
-이 전략은 모든 매매를 종가로 가정해 검증했습니다. LOC/MOC를 쓰면 **백테스트와 실제 체결이 어긋나지 않습니다.**
+이 전략은 모든 매매를 종가로 계산했습니다. 앱이 오늘 필요한 주문 종류·수량·가격을 직접 표시하므로 처음부터 외울 필요는 없습니다.
 
 증권사 앱에 'LOC'/'MOC' 또는 '종가지정가'/'종가시장가'가 있는지 먼저 확인하세요. 없으면 이 전략은 실행이 어렵습니다.
 """
         )
 
     with h2:
-        st.markdown("### ⭐ 추천 설정 (SOXL 2010-2024 검증)")
+        st.markdown("### ⭐ 현재 추천 전략 5개 (SOXL 2011~2026 검증)")
         st.dataframe(
             pd.DataFrame([
-                {"이름": n, "분할수": round(1 / p["daily_buy_pct"]), "매수비율(%)": round(p["daily_buy_pct"] * 100, 1),
-                 "CAGR(%)": p["CAGR"], "MDD(%)": p["MDD"], "효율": p["효율"]}
+                {"이름": n, "목표(%)": round(p["target_return"] * 100, 2), "청산일": p["stop_days"],
+                 "하루 새로 살 금액(%)": round(p["daily_buy_pct"] * 100, 1),
+                 "큰 손실 때 남길 금액(%)": round(p.get("loss_reset_pct", 0) * 100, 1),
+                 "일부 남기는 하락조건(%)": round(p.get("loss_reset_threshold_pct", 0) * 100, 1),
+                 # 범위를 앞에 둔다. 정확한 값 하나만 보여주면 실제보다
+                 # 정밀해 보이고, 실전에서 그보다 나쁜 값이 나왔을 때
+                 # '고장났나' 싶어 중간에 그만두게 된다.
+                 "연복리 수익률": p.get("CAGR_범위", f'{p["CAGR"]}%'),
+                 "최대 자산감소": p.get("MDD_범위", f'{p["MDD"]}%'),
+                 "정확한 실측 CAGR(%)": p["CAGR"], "정확한 실측 MDD(%)": p["MDD"]}
                 for n, p in PRESETS.items()
             ]),
             width="stretch", hide_index=True,
         )
         st.caption(
-            "**효율 = CAGR ÷ MDD**. 높을수록 위험 대비 수익이 좋습니다. "
-            "10분할(10%) 구간이 가장 효율이 높아 처음엔 여기서 시작하는 걸 권합니다. "
-            "12.5%를 넘기면 수익보다 낙폭이 더 빨리 커집니다."
+            "수치는 SOXL 과거 데이터·수수료 0.1% 기준 백테스트 결과입니다. "
+            "미래 수익을 보장하지 않습니다. 최대 자산감소는 고점에서 계좌가 가장 많이 줄었던 폭입니다."
+        )
+        st.warning(
+            "**앞의 두 칸이 범위인 이유** — 뒤의 '정확한 실측'은 그 설정 하나의 값입니다. "
+            "그런데 설정을 조금만 옮기면(손절일 ±1일, 목표 ±0.1%p, 손실문턱 ±2.5%p) "
+            "결과가 저 범위만큼 움직입니다. **다섯 프리셋 모두 실측치가 범위의 가장 좋은 끝**이었습니다.\n\n"
+            "즉 실전에서 범위의 나쁜 쪽이 나와도 **설정이 틀린 게 아니라 원래 그 범위**입니다. "
+            "균형형이라면 −40%가 아니라 **−46%까지** 각오하셔야 합니다. "
+            "게다가 검증 구간도 후보 선택에 썼으므로, 실제로는 **−50~−60%**도 가능하다고 보는 편이 안전합니다."
         )
         pc1, pc2 = st.columns([2, 1])
         with pc1:
@@ -1111,8 +1392,9 @@ with tab_help:
                 apply_preset(cfg, chosen)
                 st.rerun()
         st.caption(PRESETS[chosen]["설명"])
+        st.caption(preset_result_caption(PRESETS[chosen]))
 
-        st.markdown("### 🔧 세부 설정")
+        st.markdown("### 🔧 고급 설정 — 프리셋을 쓰면 건드리지 않아도 됩니다")
         mode_keys = list(SELL_DAY_MODES.keys())
         m = st.selectbox(
             "매도가 있는 날에도 매수할까", mode_keys,
@@ -1123,7 +1405,7 @@ with tab_help:
             "매수 범위 (%)", 3, 30, int(round(cfg.get("buy_range_pct", 0.10) * 100)),
             help="팔 물량이 없는 날 LOC 매수를 어제 종가보다 몇 % 위에 걸지. 그보다 더 오르면 안 삽니다.",
         )
-        st.caption(f"어제 종가보다 **{br}% 넘게 오른 날은 사지 않습니다.** 카페에서는 +5~10%를 씁니다.")
+        st.caption(f"어제 종가보다 **{br}% 넘게 급등한 날은 신규 매수를 건너뜁니다.** 추천 프리셋은 +10%입니다.")
         _k = round(br / 100, 2)
         if _k in BUY_RANGE_SKIPS_15Y:
             _sk, _vs = BUY_RANGE_SKIPS_15Y[_k], BUY_RANGE_VS_NOLIMIT[_k]
@@ -1147,7 +1429,7 @@ with tab_help:
                 "반대로 +20% 이상은 사실상 제한이 없는 것과 같습니다."
             )
 
-        st.markdown("### ➕ 사다리 주문 (정액매수)")
+        st.markdown("### ➕ 가격을 나눠 거는 추가 매수 주문 — 추천 프리셋은 사용 안 함")
         l1, l2 = st.columns(2)
         with l1:
             lr = st.number_input(
@@ -1162,21 +1444,53 @@ with tab_help:
         if lr:
             st.caption(
                 f"기준가에서 **−{lr * ls:.0f}%**까지 덮습니다. "
-                "LOC는 수량을 미리 적어내는데 종가가 지정가보다 낮게 끝나면 예산이 남습니다. "
-                "아래에 주문을 더 걸어 그만큼 채웁니다. **예산은 절대 안 넘깁니다.** "
+                "기본 주문보다 낮은 가격에 추가 주문을 나눠 걸어 남는 예산을 줄이는 기능입니다. **예산은 절대 안 넘깁니다.** "
                 "계좌가 커져도 주문 개수는 그대로이고, 칸마다 담기는 수량이 늘어납니다."
             )
         else:
-            st.caption("**안 씁니다.** 주문은 하루 하나로 단순해지지만 예산의 4% 정도가 남습니다.")
+            st.caption("**현재 사용하지 않습니다.** 추천 전략 5개 모두 추가 주문 없이 하루 주문을 단순하게 유지합니다.")
+
+        st.markdown("### 🔄 크게 물렸을 때 일부 주식 남기기 (고급 설정)")
+        lrp = st.number_input(
+            "보유기간 종료 후 남겨둘 주식 (%)", 0.0, 20.0,
+            float(cfg.get("loss_reset_pct", 0.0)) * 100, 0.5,
+            help="0이면 보유기간이 끝난 물량을 전부 팝니다. 9.5%면 계좌 총자산의 9.5%만큼 기존 주식을 남깁니다.",
+        )
+        lrt = st.number_input(
+            "얼마나 떨어졌을 때 남길까요? (%)", 0.0, 30.0,
+            float(cfg.get("loss_reset_threshold_pct", 0.0)) * 100, 0.5,
+            help="7.5이면 보유기간이 끝난 물량이 모두 각각 매수 기준가보다 7.5% 이상 떨어졌을 때만 일부를 남깁니다.",
+        )
+        if lrp > 0:
+            st.info(
+                f"보유기간이 끝난 물량이 **모두 각각 -{lrt:.1f}% 이상 손실**이면 전부 팔지 않고, "
+                f"계좌 전체 금액의 **{lrp:.1f}%에 해당하는 기존 주식만 그대로 남깁니다.** "
+                "나머지 주식만 팔며 새로 사는 주문은 없습니다.\n\n"
+                f"현재 설정: 평소에는 하루 **{cfg.get('daily_buy_pct', 0.1) * 100:.1f}%씩 신규 매수**, "
+                f"큰 손실로 보유기간이 끝나면 **{lrp:.1f}%만 남김**"
+            )
+            st.caption(
+                "균형형 과거 성과(2.7% 상승 시 매도·최대 16거래일·하루 10% 신규 매수·큰 손실 시 9.5% 남김) — "
+                "연복리 수익률 37.16% / 고점 대비 최대 감소 −40.40% (편도 비용 0.1%). "
+                "**검증 구간도 후보 선택에 썼으므로 완전히 독립된 시험은 아닙니다.** "
+                "과거 최대 감소가 −40%였으니 실전에서는 −50~−60%도 가능하다고 보셔야 합니다."
+            )
+            show_loss_reset_example({
+                **cfg,
+                "loss_reset_pct": lrp / 100,
+                "loss_reset_threshold_pct": lrt / 100,
+            })
+        else:
+            st.caption("**일부 남기기를 사용하지 않습니다.** 최대 보유기간이 끝나면 해당 물량을 전부 팝니다.")
 
         moc = st.checkbox(
             "내 증권사에 **MOC(종가 시장가)**가 있다", cfg.get("moc_available", True),
-            help="손절일 매도에만 씁니다. 없으면 LOC로 대신하는 방법을 알려줍니다.",
+            help="최대 보유기간이 끝난 물량을 종가에 파는 데 씁니다. 없으면 LOC로 대신하는 방법을 알려줍니다.",
         )
         if not moc:
             st.success(
                 "**LOC만 있어도 됩니다.** 매수는 원래 LOC라 문제없고, "
-                "**손절일 매도**만 LOC로 대신합니다 (종가보다 30% 아래 지정가 = 사실상 무조건 체결).\n\n"
+                "**보유기간 종료 매도**만 LOC로 대신합니다 (종가보다 30% 아래 지정가 = 사실상 무조건 체결).\n\n"
                 "**LOC는 지정가가 아니라 종가에 체결**되므로 싸게 파는 게 아닙니다. "
                 "지정가는 '체결 여부'만 정합니다."
             )
@@ -1193,6 +1507,8 @@ with tab_help:
                 "whole_shares": bool(ws), "moc_available": bool(moc),
                 "buy_range_pct": br / 100,
                 "ladder_rungs": int(lr), "ladder_step": ls / 100,
+                "loss_reset_pct": lrp / 100,
+                "loss_reset_threshold_pct": lrt / 100,
             })
             save_config(cfg)
             st.rerun()
@@ -1214,8 +1530,8 @@ with tab_notify:
     st.markdown("### 🔔 매일 텔레그램으로 받기")
     st.caption(
         "매 평일 정해진 시각에 **어젯밤 마감 결과 + 오늘 넣을 주문**을 한 통으로 보냅니다. "
-        "손절일이 3영업일 안으로 다가온 물량도 미리 알려줍니다 — 목표 매도는 주문만 걸어두면 "
-        "알아서 체결되지만, 손절은 날짜를 직접 세야 해서 제일 놓치기 쉽습니다."
+        "최대 보유기간 종료가 3거래일 안으로 다가온 물량도 미리 알려줍니다. 목표 매도는 주문만 걸어두면 "
+        "자동으로 체결되지만, 기간 종료는 날짜를 직접 세야 해서 놓치기 쉽습니다."
     )
 
 if is_shared_server():

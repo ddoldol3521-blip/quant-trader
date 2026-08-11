@@ -18,7 +18,7 @@ import pandas as pd
 
 # 주문을 만드는 규칙은 실전 쪽(jongsa_live)에 있다. 백테스트가 그걸 그대로
 # 가져다 써야 '앱이 알려준 주문'과 '엔진이 계산한 결과'가 어긋나지 않는다.
-from src.jongsa_live import build_ladder
+from src.jongsa_live import build_ladder, plan_loss_reset
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -31,6 +31,22 @@ class Lot:
     buy_price: float
     qty: float
     target_price: float
+    # ----- 손실 리셋 모드에서만 쓰는 두 가지 -----
+    # 리셋은 '판 뒤에 다시 사는' 것이 아니라 **일부만 팔고 남기는** 것이다.
+    # 그래서 증권사 취득단가(buy_price)는 그대로 두고, 전략이 보는 기준가만
+    # 그날 종가로 바꾼다. 둘을 한 값으로 쓰면 손익이 틀어지거나 목표가가
+    # 안 움직이거나 둘 중 하나가 된다.
+    #
+    #   buy_price            실제로 낸 돈. 손익 계산은 늘 이걸로 한다.
+    #   strategy_basis_price 손실 여부·목표가를 볼 때 쓰는 값.
+    #
+    # 리셋을 안 쓰면(loss_reset_pct=0) 둘은 언제나 같다.
+    strategy_basis_price: float = None
+    origin: str = "normal_buy"   # normal_buy | loss_reset
+
+    def __post_init__(self):
+        if self.strategy_basis_price is None:
+            self.strategy_basis_price = self.buy_price
 
 
 @dataclass
@@ -55,6 +71,11 @@ class JongsaResult:
     avg_open_lots: float = 0.0
     cash_exhausted_days: int = 0
     buy_range_skips: int = 0   # 매수 범위를 넘겨 매수를 건너뛴 날 수
+    # ----- 손실 리셋 -----
+    # 몇 번이나 '전량 팔지 않고 남겼는지'. 0이면 리셋을 안 썼거나 조건이
+    # 한 번도 안 맞은 것이다. 설정을 켰는데 0이면 뭔가 잘못된 것이다.
+    loss_reset_days: int = 0
+    loss_reset_kept_qty: float = 0.0
     final_value: float = 0.0
     # ----- 중간 입출금 관련 -----
     # 입출금이 있으면 '총자산 / 시드 - 1'은 수익률이 아니게 된다.
@@ -188,6 +209,8 @@ def run_jongsa(
     dividends=None,
     ladder_rungs: int = 0,
     ladder_step: float = 0.03,
+    loss_reset_pct: float = 0.0,
+    loss_reset_threshold_pct: float = 0.0,
     dd_thresholds=(-0.20, -0.25, -0.30),
 ) -> JongsaResult:
     """종사종팔 백테스트.
@@ -212,6 +235,20 @@ def run_jongsa(
     ladder_rungs / ladder_step: 사다리 주문(정액매수). 기본 매수 아래로
         지정가를 낮춰가며 주문을 몇 칸 더 걸지. 0이면 안 쓴다.
         자세한 계산은 src/jongsa_live.py의 build_ladder() 참고.
+    loss_reset_pct: **손실 리셋**. 0이면 안 쓴다(예전 그대로).
+        0보다 크면, 손절일이 찬 물량이 전부 전일 기준 손실일 때 전량 팔지 않고
+        전일 총자산의 이 비율만큼만 남긴다. 남긴 물량은 그날 종가를 새 기준으로
+        삼아 보유일과 목표가를 다시 센다.
+
+        전량 손절은 손실을 확정하고 자리를 비워 반등을 놓친다. 그 자리를
+        조금 남겨 두자는 것이 이 규칙이다. 하루 매수금(daily_buy_pct)과는
+        **다른 비율**이다 — 신규매수는 10%, 리셋 유지는 6% 식으로 쓴다.
+
+        일부만 파는 것이지 팔았다가 되사는 것이 아니므로, 남긴 수량에는
+        수수료가 붙지 않고 취득단가도 그대로다.
+    loss_reset_threshold_pct: 리셋을 발동할 최소 손실률.
+        0이면 전일 기준 단순 손실, 0.075면 모든 만기 물량이 각각 전일 기준
+        -7.5% 이하일 때만 리셋한다.
     """
     df = clean_prices(df)
     close = df["Close"].astype(float).values
@@ -236,6 +273,8 @@ def run_jongsa(
     realized_pnl = np.zeros(n)  # 그날 실현손익 (V4 복리 계산용)
     cash_exhausted = 0
     range_skips = 0   # 매수 범위를 넘겨 그냥 지나간 날
+    reset_days = 0        # 손실 리셋이 일어난 날 수
+    reset_kept_qty = 0.0  # 그때 남긴 수량 합계
 
     prev_total_assets = float(initial_cash)
 
@@ -326,6 +365,31 @@ def run_jongsa(
         did_sell = False
         sold_pnls: list[float] = []
         remaining: list[Lot] = []
+
+        # 손실 리셋: 16일이 찬 물량이 **전부 전일 기준 손실**이면 전량 팔지 않고
+        # 전일 총자산의 일정 비율만 남긴다. 남긴 것은 오늘 종가를 새 기준으로
+        # 삼아 다시 센다. loss_reset_pct=0이면 이 블록은 통째로 건너뛴다.
+        forced_lots = [l for l in open_lots if (t - l.buy_day_idx) >= stop_days]
+        reset = None
+        if loss_reset_pct > 0 and forced_lots and t > 0:
+            reset = plan_loss_reset(
+                [{"quantity": l.qty, "strategy_basis_price": l.strategy_basis_price}
+                 for l in forced_lots],
+                prev_close=close[t - 1],
+                prev_total_assets=prev_total_assets,
+                retain_pct=loss_reset_pct,
+                fee=fee_rate,
+                whole_shares=whole_shares,
+                loss_threshold_pct=loss_reset_threshold_pct,
+            )
+            if not reset["all_loss"]:
+                reset = None   # 하나라도 손실이 아니면 예전처럼 전량 매도
+
+        # 남길 수량은 오래된 것부터 채운다(선입선출). 어느 것을 남기든 현금은
+        # 같지만, 취득단가가 섞이므로 순서를 정해두지 않으면 결과가 흔들린다.
+        retain_left = reset["retain_qty"] if reset else 0.0
+        retain_parts = []   # (수량, 취득단가) — 남긴 것들의 평균단가를 내는 데 쓴다
+
         for lot in open_lots:
             held = t - lot.buy_day_idx
             sell_reason = None
@@ -333,6 +397,18 @@ def run_jongsa(
                 sell_reason = "목표달성"
             elif held >= stop_days:
                 sell_reason = "강제손절"
+
+            # 리셋하는 날의 강제청산 건은 일부(또는 전부)를 남긴다.
+            if sell_reason == "강제손절" and reset and retain_left > 0:
+                keep = min(lot.qty, retain_left)
+                retain_left -= keep
+                retain_parts.append((keep, lot.buy_price))
+                if keep >= lot.qty - 1e-9:
+                    continue          # 이 건은 통째로 남았다 — 팔 것이 없다
+                lot = Lot(buy_day_idx=lot.buy_day_idx, buy_price=lot.buy_price,
+                          qty=lot.qty - keep, target_price=lot.target_price,
+                          strategy_basis_price=lot.strategy_basis_price,
+                          origin=lot.origin)   # 남은 만큼만 판다
 
             if sell_reason:
                 proceeds = lot.qty * price * (1 - fee_rate)
@@ -363,12 +439,46 @@ def run_jongsa(
                 remaining.append(lot)
         open_lots = remaining
 
+        # ---------- 1-2) 남긴 물량을 새 lot 으로 ----------
+        # 장이 끝나야 오늘 종가가 확정된다. 그때 남은 수량을 하나로 묶어
+        # 오늘 종가를 새 기준으로 삼는다.
+        #
+        # 취득단가는 **남긴 것들의 가중평균**을 쓴다. 실제로 낸 돈이 바뀌지
+        # 않았으므로 손익은 이 값으로 계산해야 맞다. 전략이 보는 기준가만
+        # 오늘 종가로 바꾼다.
+        if reset and retain_parts:
+            kept_qty = sum(q for q, _ in retain_parts)
+            kept_cost = sum(q * p for q, p in retain_parts)
+            avg_cost = kept_cost / kept_qty if kept_qty > 0 else price
+            tgt = price * (1 + target_return)
+            if fee_in_target:
+                tgt *= 1 + 2 * fee_rate
+            open_lots.append(
+                Lot(buy_day_idx=t, buy_price=avg_cost, qty=kept_qty,
+                    target_price=tgt, strategy_basis_price=price,
+                    origin="loss_reset")
+            )
+            reset_days += 1
+            reset_kept_qty += kept_qty
+            # 현금도 보유수량도 건드리지 않는다 — 판 것이 아니기 때문이다.
+            # (판 몫은 위 반복문에서 이미 처리됐다)
+
         # ---------- 2) 매수 판정 ----------
         # 기본은 '매도가 있는 날은 매수하지 않는다'(V4부터의 규칙).
         # 변형: 손절로 청산된 건은 목표 미달이니 재진입을 허용한다는 발상.
         #   any_loss — 오늘 매도분 중 손실이 하나라도 있으면 매수
         #   all_loss — 오늘 매도분이 전부 손실일 때만 매수
-        if not did_sell:
+        # 손절일이 찬 물량이 있던 날은 **판 것이 하나도 없어도** 매수하지 않는다.
+        #
+        # 리셋으로 전부 남기면(순매도 0) did_sell 이 False 가 되어 매수가 열린다.
+        # 그러면 같은 날 '남기기 + 새로 사기'가 겹쳐 노출이 뛴다. 실제로 그
+        # 상태로 재보니 2011~2020 MDD 가 명세보다 4%p 깊었다.
+        # 규칙은 '손절일이 온 날은 정리하는 날' 이지 '판 날' 이 아니다.
+        # (리셋 모드에서만. 예전 '손절재진입' 설정은 손절일에도 사도록 되어
+        #  있으므로 그쪽 동작을 바꾸면 안 된다.)
+        if loss_reset_pct > 0 and forced_lots:
+            buy_today = False
+        elif not did_sell:
             buy_today = True
         elif sell_day_buy_mode == "any_loss":
             buy_today = any(p < 0 for p in sold_pnls)
@@ -583,6 +693,11 @@ def run_jongsa(
                 "buy_price": float(l.buy_price),
                 "qty": float(l.qty),
                 "target_price": float(l.target_price),
+                # 손실 여부는 **전략 기준가**로 판정한다. 리셋된 물량은 취득단가와
+                # 다르므로 이걸 안 실어 보내면 앱이 취득단가로 판정하게 되고,
+                # 백테스트와 앱이 서로 다른 답을 낸다.
+                "strategy_basis_price": float(l.strategy_basis_price),
+                "origin": l.origin,
             }
             for l in open_lots
         ],
@@ -591,6 +706,8 @@ def run_jongsa(
         avg_open_lots=float(open_lot_counts.mean()),
         cash_exhausted_days=cash_exhausted,
         buy_range_skips=range_skips,
+        loss_reset_days=reset_days,
+        loss_reset_kept_qty=reset_kept_qty,
         final_value=float(equity_s.iloc[-1]),
         twr_curve=twr_s,
         contributed_curve=contributed_s,
