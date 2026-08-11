@@ -51,13 +51,42 @@ def preset_index(name: str) -> int:
 st.markdown(
     """
 <style>
-  .block-container {padding: 0.8rem 1.2rem 1rem 1.2rem; max-width: 100%;}
+  .block-container {padding: 1rem 1.4rem 1.5rem 1.4rem; max-width: 1500px;}
+  .qm-hero {
+      padding: 1.15rem 1.35rem; margin: 0 0 0.85rem 0;
+      color: #F8FAFC; border: 1px solid rgba(37,99,235,0.26); border-radius: 16px;
+      background: linear-gradient(135deg, #1B3555 0%, #185463 100%);
+      box-shadow: 0 10px 28px rgba(0,0,0,0.24);
+  }
+  .qm-hero h1 {font-size: 1.75rem; margin: 0 0 0.2rem 0; line-height: 1.25;}
+  .qm-hero p {margin: 0; color:#D8EAF3; font-size: 0.92rem;}
+  .qm-eyebrow {
+      display: inline-block; margin-bottom: 0.45rem; padding: 0.2rem 0.55rem;
+      border-radius: 999px; background: rgba(79,70,229,0.12);
+      color: rgb(99,102,241); font-size: 0.72rem; font-weight: 700;
+  }
+  .qm-section-title {font-size: 1.08rem; font-weight: 750; margin: 0.05rem 0 0.1rem 0;}
+  .qm-muted {font-size: 0.82rem; opacity: 0.68; margin-bottom: 0.35rem;}
+  .qm-steps {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.65rem; margin: 0.15rem 0 0.85rem 0;
+  }
+  .qm-step {
+      padding: 0.8rem 0.95rem; border-radius: 12px;
+      border: 1px solid #34485B;
+      background: linear-gradient(145deg, #1C2936, #1B323B);
+      box-shadow: 0 3px 12px rgba(0,0,0,0.16);
+  }
+  .qm-step b {display:block; color:#79B5FF; font-size:0.78rem; margin-bottom:0.18rem;}
+  .qm-step span {font-size:0.9rem; line-height:1.35;}
+  @media (max-width: 760px) {.qm-steps {grid-template-columns: 1fr;}}
   [data-testid="stMetric"] {
-      background: rgba(128,128,128,0.07);
-      border: 1px solid rgba(128,128,128,0.22);
-      border-radius: 8px; padding: 8px 12px;
-      /* 델타(+91% 같은 것)가 있는 카드와 없는 카드의 아래 끝을 맞춘다 */
-      min-height: 92px;
+      background: linear-gradient(145deg, #1C2632, #202D39);
+      border: 1px solid #334353;
+      border-radius: 12px; padding: 10px 13px;
+      box-shadow: 0 3px 12px rgba(0,0,0,0.14);
+      /* 증감 표시가 있든 없든 모든 지표 카드의 위·아래를 정확히 맞춘다. */
+      height: 100px; min-height: 100px; box-sizing: border-box;
       display: flex; flex-direction: column; justify-content: center;
   }
   [data-testid="stMetricLabel"] p {font-size: 0.78rem; opacity: 0.8;}
@@ -67,15 +96,20 @@ st.markdown(
   hr {margin: 0.5rem 0 !important;}
   h1 {font-size: 1.6rem; margin-bottom: 0.1rem;}
   h3 {font-size: 1.05rem; margin: 0.3rem 0 0.2rem 0;}
-  .stDataFrame {border-radius: 6px;}
-  div[data-testid="stExpander"] {border-radius: 8px;}
+  .stDataFrame {border-radius: 10px; overflow: hidden;}
+  div[data-testid="stExpander"] {border-radius: 12px; border-color: #334353; background:#151E27;}
+  div[data-testid="stVerticalBlockBorderWrapper"] {border-color:#33485A !important; background:#17222D; box-shadow:0 4px 16px rgba(0,0,0,0.14);}
+  div[data-testid="stButton"] button {border-radius: 10px; min-height: 2.55rem; font-weight: 700;}
+  div[data-testid="stSelectbox"] > div > div,
+  div[data-testid="stNumberInput"] input,
+  div[data-testid="stTextInput"] input {border-radius: 9px;}
   .stCaption, [data-testid="stCaptionContainer"] p {margin-bottom: 0.15rem;}
 
   /* 탭을 상단에 크게. 이 스트림릿 버전에는 data-baseweb="tab" 속성이 없어서
      [role="tab"]으로 잡아야 한다. */
-  [role="tablist"] {gap: 4px; margin-bottom: 0.4rem;}
-  [role="tab"] {padding: 10px 20px !important;}
-  [role="tab"] p {font-size: 1.0rem !important; font-weight: 600;}
+  [role="tablist"] {gap: 3px; margin-bottom: 0.65rem; border-bottom: 1px solid #2C3947;}
+  [role="tab"] {padding: 9px 16px !important;}
+  [role="tab"] p {font-size: 0.94rem !important; font-weight: 650;}
   [role="tabpanel"] [role="tab"] {padding: 6px 14px !important;}
   [role="tabpanel"] [role="tab"] p {font-size: 0.9rem !important;}
 
@@ -407,7 +441,15 @@ def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole,
     return res, hist, bh
 
 
-st.markdown("# 🔁 SOXL 퀀트믹스")
+st.markdown(
+    """
+<div class="qm-hero">
+  <h1>SOXL 퀀트믹스</h1>
+  <p>검증된 전략을 고르면 오늘 필요한 주문을 자동으로 계산합니다.</p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 if is_shared_server():
     st.caption(
         "SOXL 분할매매 계산기입니다. **투자 자문이 아니고 수익을 보장하지 않습니다.** "
@@ -415,8 +457,8 @@ if is_shared_server():
         "이 설정 그대로 뜹니다 (주소창을 보면 설정값이 붙어 있습니다)."
     )
 
-tab_home, tab_grid, tab_year, tab_compare, tab_help, tab_notify = st.tabs(
-    ["📅 오늘 주문", "📋 매매 기록", "📊 과거 성과 시험", "🏆 전략별 성과 비교", "📖 사용법 · 설정", "🔔 알림"]
+tab_home, tab_compare, tab_year, tab_grid, tab_help, tab_notify = st.tabs(
+    ["📅 오늘 주문", "🏆 전략 비교", "📊 백테스트", "📋 매매 기록", "📖 사용법·설정", "🔔 알림"]
 )
 
 # ============================================================ 오늘 할 일
@@ -427,64 +469,91 @@ ready = True
 with tab_home:
     # ============================================================ 설정 (맨 위)
 
-    quick1, quick2 = st.columns([3, 1])
-    with quick1:
-        quick_preset = st.selectbox(
-            "어떤 방식으로 운용할까요?",
-            list(PRESETS.keys()),
-            index=preset_index("균형형 ⭐ 추천"),
-            key="quick_preset",
-            help="검증된 조합을 고른 뒤 오른쪽 버튼을 누르면 모든 전략값이 한 번에 적용됩니다.",
-        )
-    with quick2:
-        st.write("")
-        if st.button("이 전략 적용", type="primary", width="stretch", key="quick_apply"):
-            apply_preset(cfg, quick_preset)
-            st.rerun()
-    st.caption(PRESETS[quick_preset]["설명"])
-    st.caption(preset_result_caption(PRESETS[quick_preset]))
-    st.caption("🔬 **SOXL 약 15.5년 · 약 29.5만 설정 조합 · 누적 31만 회 이상 시뮬레이션에서 선별**")
-    st.info("**사용 순서:** ① 전략 선택 → ② `이 전략 적용` → ③ 아래에 표시된 오늘 주문을 증권사 앱에 입력")
+    st.markdown(
+        """
+<div class="qm-steps">
+  <div class="qm-step"><b>1단계 · 전략 고르기</b><span>처음이면 <strong>균형형</strong>을 선택하세요.</span></div>
+  <div class="qm-step"><b>2단계 · 내 정보 입력</b><span>투자금과 실제로 시작한 날짜를 적으세요.</span></div>
+  <div class="qm-step"><b>3단계 · 주문 넣기</b><span>아래에 나온 매수·매도 주문을 그대로 입력하세요.</span></div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
-    r1c1, r1c2, r1c3, r1c4 = st.columns([1, 1.1, 1, 1.2])
+    with st.container(border=True):
+        st.markdown('<div class="qm-section-title">내 투자 성향 고르기</div>', unsafe_allow_html=True)
+        st.markdown('<div class="qm-muted">목록에서 하나를 고른 다음 파란 버튼을 눌러야 실제 설정에 반영됩니다.</div>', unsafe_allow_html=True)
+        quick1, quick2 = st.columns([3, 1])
+        with quick1:
+            quick_preset = st.selectbox(
+                "투자 성향",
+                list(PRESETS.keys()),
+                index=preset_index("균형형 ⭐ 추천"),
+                key="quick_preset",
+                label_visibility="collapsed",
+                help="검증된 조합을 고른 뒤 오른쪽 버튼을 누르면 모든 전략값이 한 번에 적용됩니다.",
+            )
+        with quick2:
+            if st.button("이 전략으로 설정", type="primary", width="stretch", key="quick_apply"):
+                apply_preset(cfg, quick_preset)
+                st.rerun()
+        st.markdown(f"**쉽게 말하면:** {PRESETS[quick_preset]['설명']}")
+        st.caption(preset_result_caption(PRESETS[quick_preset]))
+        st.caption("SOXL 약 15.5년 · 약 29.5만 설정 조합 · 누적 31만 회 이상 시뮬레이션에서 선별")
+
+    st.markdown('<div class="qm-section-title">내 투자 정보 입력</div>', unsafe_allow_html=True)
+    # 같은 단계의 입력칸은 같은 폭으로 보여야 우선순위가 동일하게 느껴진다.
+    r1c1, r1c2, r1c3 = st.columns(3)
     with r1c1:
-        ticker = st.text_input("종목", value=cfg.get("ticker", "SOXL")).strip().upper()
+        ticker = st.text_input("투자할 종목", value=cfg.get("ticker", "SOXL"), help="이 앱은 SOXL 전략용입니다. 보통 바꾸지 않습니다.").strip().upper()
     with r1c2:
-        seed = st.number_input("시드 ($)", 100.0, value=float(cfg.get("initial_cash", 10000.0)), step=1000.0)
+        seed = st.number_input("처음 넣은 투자금 ($)", 100.0, value=float(cfg.get("initial_cash", 10000.0)), step=1000.0, help="전략을 시작할 때 계좌에 넣은 달러 금액입니다.")
     with r1c3:
-        daily_buy_pct = st.number_input(
-            "하루에 새로 살 금액 (%)", 1.0, 50.0, float(cfg.get("daily_buy_pct", 0.10) * 100), 0.5,
-            help="예: 10%는 어제 계좌가 $20,000이면 오늘 최대 $2,000어치를 새로 산다는 뜻입니다.",
-        )
-    with r1c4:
         # 상한을 넉넉히 잡아 막지 않는다. 기간이 너무 짧으면 아래 계산에서
         # 며칠 이전으로 잡아야 하는지 알려준다 (무조건 막으면 왜 안 되는지 알 수 없다).
         _lo, _hi = date(2010, 3, 11), date.today()
         _saved = pd.Timestamp(cfg.get("start_date") or "2025-01-02").date()
-        start_d = st.date_input("시작일", value=min(max(_saved, _lo), _hi), min_value=_lo, max_value=_hi)
+        start_d = st.date_input(
+            "시작일",
+            value=min(max(_saved, _lo), _hi), min_value=_lo, max_value=_hi,
+            help=(
+                "전략을 처음 적용할 미국장 날짜입니다. 한국에서 주문을 입력한 날짜가 아니라 "
+                "주문 대상인 미국 증시의 날짜를 선택하세요. 예를 들어 한국시간 8월 10일 밤이나 "
+                "8월 11일 새벽에 미국 8월 10일 장의 LOC 주문을 넣는다면 시작일은 8월 10일입니다. "
+                "이 날짜부터 앱이 보유 주식과 오늘 주문을 계산합니다."
+            ),
+        )
 
-    r2c1, r2c2, r2c3, r2c4 = st.columns([1, 1, 1, 1.2])
-    with r2c1:
-        tgt_pct = st.number_input("몇 % 오르면 팔까요?", 0.5, 20.0, cfg.get("target_return", 0.0275) * 100, 0.05)
-    with r2c2:
-        stop_days = st.number_input("최대 몇 거래일 보유할까요?", 2, 60, int(cfg.get("stop_days", 10)))
-    with r2c3:
-        fee_pct = st.number_input("수수료 (%)", 0.0, 1.0, cfg.get("fee_rate", 0.0) * 100, 0.001, format="%.4f")
-    with r2c4:
+    with st.expander("⚙️ 선택한 전략의 세부 숫자 보기 · 초보자는 바꾸지 않아도 됩니다"):
+        r2c1, r2c2, r2c3, r2c4 = st.columns(4)
+        with r2c1:
+            daily_buy_pct = st.number_input(
+                "하루 신규 매수 비율 (%)", 1.0, 50.0, float(cfg.get("daily_buy_pct", 0.10) * 100), 0.5,
+                help="예: 10%는 어제 계좌가 $20,000이면 오늘 최대 $2,000어치를 새로 산다는 뜻입니다.",
+            )
+        with r2c2:
+            tgt_pct = st.number_input("목표 수익률 (%)", 0.5, 20.0, cfg.get("target_return", 0.0275) * 100, 0.05)
+        with r2c3:
+            stop_days = st.number_input("최대 보유 거래일", 2, 60, int(cfg.get("stop_days", 10)))
+        with r2c4:
+            fee_pct = st.number_input("편도 거래비용 (%)", 0.0, 1.0, cfg.get("fee_rate", 0.0) * 100, 0.001, format="%.4f")
         reinvest = st.radio(
-            "수익 재투자", [True, False],
+            "수익을 다음 매수금 계산에 반영",
+            [True, False],
             index=0 if cfg.get("reinvest", True) else 1,
-            format_func=lambda v: "⭕ 함 (복리)" if v else "❌ 안 함 (고정)",
+            format_func=lambda v: "반영함 (복리)" if v else "반영 안 함 (고정금액)",
             horizontal=True,
         )
 
     daily_pct = daily_buy_pct / 100
     splits = max(1, int(round(1 / daily_pct)))
     rec = "  ✅ **추천 프리셋**" if abs(daily_buy_pct - 10.0) < 0.01 and abs(tgt_pct - 2.70) < 0.01 and stop_days == 16 else ""
-    st.caption(
-        f"하루 매수금 = {'어제 총자산' if reinvest else '넣은 돈'}의 **{daily_pct*100:.1f}%** "
-        f"(약 {splits}분할) · 목표 **+{tgt_pct:.2f}%** 도달 시 매도 · **{stop_days}영업일** 지나면 무조건 매도{rec}"
-    )
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("하루 새로 매수", f"{daily_pct*100:.1f}%", f"약 {splits}분할")
+    s2.metric("수익 매도 기준", f"+{tgt_pct:.2f}%")
+    s3.metric("최대 보유", f"{stop_days}거래일")
+    s4.metric("수익 재투자", "복리" if reinvest else "고정")
+    st.caption(f"현재 적용된 규칙{rec} · 이 숫자를 외울 필요는 없습니다. 아래에서 오늘 넣을 주문만 확인하세요.")
 
     # ---------- 중간 입출금 ----------
     _flows = st.session_state.flows
@@ -717,9 +786,10 @@ if ready:
             + (f" 최대 보유기간 {stop_days}거래일이 아직 지나지 않아 기간종료 매도가 없을 수 있습니다."
                if len(log) <= int(stop_days) else "")
         )
-    st.caption(
-        f"마지막 반영 종가는 **{price_date}의 \\${price:,.2f}** 입니다. "
-        "아래는 **오늘 마감 전에 미리 걸어둘 주문**입니다. 오늘 종가를 몰라도 되게 만들어져 있습니다."
+    st.markdown("## 오늘 증권사 앱에 입력할 주문")
+    st.info(
+        f"**아래의 빨간색 ‘팔 주문’과 초록색 ‘살 주문’만 확인하면 됩니다.** "
+        f"{price_date:%Y-%m-%d} 종가(\\${price:,.2f})로 계산했으며, 오늘 종가를 미리 알 필요는 없습니다."
     )
 
     # 오늘 종가를 모르는 상태에서 주문을 짠다 (원문 요령: 매수 LOC = 최저 목표가 - 0.01)
@@ -735,7 +805,7 @@ if ready:
 
     a1, a2 = st.columns(2)
     with a1:
-        st.markdown("### 🔴 팔 주문")
+        st.markdown("### 🔴 ① 팔 주문 · 있으면 먼저 입력")
         if forced or pending:
             rows = []
             for s in forced:
@@ -788,21 +858,21 @@ if ready:
                     "안 되면 그냥 미체결이고 내일 다시 겁니다."
                 )
         else:
-            st.success("**팔 주문 없음** — 어제 산 것뿐이라 아직 매도 대상이 아닙니다.")
+            st.success("**오늘 입력할 팔 주문은 없습니다.** 다음 초록색 ‘살 주문’만 확인하세요.")
 
     with a2:
-        st.markdown("### 🟢 살 주문")
+        st.markdown("### 🟢 ② 살 주문 · 화면 그대로 입력")
         if buy["type"] == "LOC":
             st.info(
                 f"### {buy['qty']:,.0f}주 매수 — **LOC 지정가 \\${buy['limit']:.2f}**\n\n"
                 f"약 **\\${buy['cost']:,.2f}** · 지정가 = 위 목표가 중 최저 "
                 f"**\\${buy['limit'] + 0.01:.2f}** 에서 **−$0.01**"
             )
-            st.caption(
-                "**왜 이렇게 거나** — 종가가 목표가에 닿으면 매도가 체결되면서 이 매수는 "
-                "지정가를 넘어 자동으로 미체결됩니다. 안 닿으면 매도 없이 매수만 됩니다. "
-                "**'판 날은 안 산다'는 규칙이 주문 하나로 지켜집니다.**"
-            )
+            with st.expander("왜 이런 가격으로 주문하나요? · 궁금할 때만 보기"):
+                st.write(
+                    "종가가 목표 매도가에 닿으면 팔 주문이 체결되고, 살 주문은 자동으로 체결되지 않습니다. "
+                    "반대로 팔리지 않은 날에는 살 주문만 체결됩니다. 따라서 같은 날 팔고 다시 사는 일을 막아줍니다."
+                )
         elif buy["type"] == "LOC_RANGE":
             _rng = cfg.get("buy_range_pct", 0.10)
             st.info(
@@ -810,13 +880,12 @@ if ready:
                 f"약 **\\${buy['cost']:,.2f}** · 오늘은 팔 물량이 없습니다. "
                 f"지정가 = 어제 종가 \\${price:,.2f} × (1 + **매수 범위 {_rng*100:.0f}%**)"
             )
-            st.caption(
-                f"**매수 범위란** — 어제 종가보다 {_rng*100:.0f}% 넘게 오른 날은 사지 않겠다는 뜻입니다. "
-                f"그 안에서 마감하면 **종가에** 체결됩니다 (지정가에 사는 게 아닙니다). "
-                + (f"과거 SOXL 15년(3,919거래일)에서 이 설정으로 건너뛴 날은 "
-                   f"**{BUY_RANGE_SKIPS_15Y[round(_rng, 2)]}일**뿐이었습니다."
-                   if round(_rng, 2) in BUY_RANGE_SKIPS_15Y else "")
-            )
+            with st.expander("LOC 매수는 언제 체결되나요? · 궁금할 때만 보기"):
+                st.write(
+                    f"오늘 종가가 표시된 지정가 이하이면 오늘 종가로 삽니다. "
+                    f"어제보다 {_rng*100:.0f}% 넘게 급등하면 사지 않고 하루 쉽니다. "
+                    "화면의 지정가는 살 수 있는 가장 높은 가격이며, 실제 매수가는 오늘 종가입니다."
+                )
         else:
             st.error(f"### 오늘은 매수 없음\n\n{buy['reason']}")
 
@@ -857,7 +926,8 @@ if ready:
             f"미체결이면 아무것도 안 하시면 됩니다."
         )
 
-    b1, b2 = st.columns([1.25, 1])
+    # 위의 '팔 주문 / 살 주문'과 같은 1:1 그리드를 유지한다.
+    b1, b2 = st.columns(2)
     with b1:
         st.markdown(f"### 📦 현재 보유 ({len(res.final_lots)}건)")
         if res.final_lots:
