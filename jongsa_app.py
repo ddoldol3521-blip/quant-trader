@@ -19,7 +19,13 @@ import streamlit as st
 from src.data.kr_data import get_dividends, get_kr_ohlcv
 from src.jongsa_backtest import run_buy_and_hold, run_jongsa
 from src.jongsa_live import BUY_RANGE_SKIPS_15Y, BUY_RANGE_VS_NOLIMIT, PRESETS, SELL_DAY_MODES
-from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
+from src.jongsa_live import (
+    CANDIDATE_STRATEGIES,
+    apply_preset,
+    is_shared_server,
+    load_config,
+    save_config,
+)
 from src.jongsa_live import make_held_counter, order_plan, target_price_for
 from src.jongsa_notify import build_message, send_now
 from src.scheduler import (JONGSA_TASK_NAME, get_jongsa_task_status, load_jongsa_notify_config,
@@ -1339,7 +1345,7 @@ with tab_year:
 with tab_compare:
     st.markdown("## 🏆 추천 전략 백테스트 비교")
     st.info(
-        "**약 294,900개 설정 조합에서 추린 추천 전략 5개입니다.** "
+        "**약 294,900개 설정 조합에서 추린 기본 전략 5개와 보조매매 후보 4개입니다.** "
         "기간분리·거래비용·실행방식·보조지표 검사를 합친 누적 시뮬레이션은 **31만 회 이상**입니다."
     )
     st.caption(
@@ -1372,7 +1378,7 @@ with tab_compare:
 - 매수 수량은 당일 종가를 미리 사용하지 않고 전일 가격 또는 기존 목표가로 산정
 - 정수주와 편도 거래비용 0.1%를 기본 반영
 
-보조지표 전략까지 추가로 시험했지만 여러 기간과 비용 조건에서 현재 균형형을 확실하게 이기지 못해 기본 추천은 유지했습니다.
+보조지표 전략은 기본 퀀트믹스 주문을 그대로 유지하면서, 조건이 맞는 날에만 소액 보조매매를 더하는 방식입니다.
 """
         )
         st.warning(
@@ -1405,6 +1411,36 @@ with tab_compare:
             "성격": _role,
         })
     st.dataframe(pd.DataFrame(_compare_rows), width="stretch", hide_index=True)
+    st.markdown("### 보조매매 후보 비교")
+    st.caption(
+        "아래 후보는 기존 퀀트믹스를 없애는 전략이 아니라, SOXX·SOXL 보조지표 조건이 맞을 때만 "
+        "별도 매매를 더한 결과입니다. 오늘 주문 화면에는 아직 기본 프리셋 주문만 표시됩니다."
+    )
+    _candidate_rows = []
+    for _name, _candidate in CANDIDATE_STRATEGIES.items():
+        _candidate_rows.append({
+            "전략": _name,
+            "전체 연복리 수익률": f"{_candidate['CAGR']:.2f}%",
+            "기존 대비": f"{_candidate['CAGR_gain']:+.2f}%p",
+            "고점 대비 최대 감소": f"{_candidate['MDD']:.2f}%",
+            "MDD 변화": f"{_candidate['MDD_change']:+.2f}%p",
+            "보조매수 횟수": f"{_candidate['entries']}회",
+            "구분": _candidate["status"],
+            "쉬운 설명": _candidate["rule"],
+        })
+    st.dataframe(pd.DataFrame(_candidate_rows), width="stretch", hide_index=True)
+    with st.expander("보조매매 후보는 어떻게 움직이나요?"):
+        st.markdown(
+            """
+- **RSI16 안정형**: 시장이 과열되지 않았고 SOXL이 충분히 떨어졌을 때만 계좌의 1~1.5%를 별도로 삽니다.
+- **RSI14 성장형**: RSI16보다 신호가 빨라 매수 기회가 조금 더 많습니다.
+- **SafeA**: 하루 -11% 수준의 큰 급락과 과매도 조건이 같이 나타날 때만 작게 삽니다.
+- **Stochastic 보강형**: RSI16 안정형 조건 중 SOXX Stochastic K가 20보다 낮으면 보조매수 비중을 2%로 늘립니다.
+
+보조매수 물량은 **수익 +9%에서 LOC 매도**, 체결되지 않으면 **최대 16거래일 후 MOC 매도**합니다.
+성과는 SOXL 2011~2026 실데이터, 정수주, 기본 전략 편도 0.1% 및 보조매매 편도 0.5%를 반영한 결과입니다.
+"""
+        )
     st.warning(
         "'고점 대비 최대 감소'는 과거 가장 힘든 순간의 계좌 감소폭입니다. 실전에서는 이보다 더 큰 손실이 날 수 있으며, "
         "후보 선정에 2021~2026 데이터도 사용했으므로 앞으로의 데이터가 진짜 미사용 검증 구간입니다."
