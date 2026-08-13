@@ -44,7 +44,8 @@ def find_chat_id(bot_token: str) -> str:
     return str(results[-1]["message"]["chat"]["id"])
 
 
-def send_telegram_message(text: str, token: str = None, chat_id: str = None) -> None:
+def send_telegram_message(text: str, token: str = None, chat_id: str = None,
+                          parse_mode: str = None) -> None:
     """텔레그램으로 메시지를 보낸다. 너무 길면 여러 개로 나눠서 보낸다."""
     if not token or not chat_id:
         token, chat_id = load_telegram_config()
@@ -53,6 +54,9 @@ def send_telegram_message(text: str, token: str = None, chat_id: str = None) -> 
     chunks = [text[i : i + MAX_MESSAGE_LEN] for i in range(0, len(text), MAX_MESSAGE_LEN)] or [text]
 
     for chunk in chunks:
-        resp = requests.post(url, data={"chat_id": chat_id, "text": chunk}, timeout=10)
+        payload = {"chat_id": chat_id, "text": chunk}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        resp = requests.post(url, data=payload, timeout=10)
         if resp.status_code != 200:
             raise RuntimeError(f"텔레그램 전송 실패 ({resp.status_code}): {resp.text}")

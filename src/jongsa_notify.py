@@ -13,6 +13,7 @@
 """
 
 import os
+import html
 from datetime import date
 
 import pandas as pd
@@ -272,5 +273,15 @@ def send_now(today: date = None, config: dict = None, cash_flows: list = None) -
     """지금 바로 한 통 보낸다. 보낸 내용을 돌려준다."""
     msg = build_message(today, config=config, cash_flows=cash_flows)
     token, chat_id = resolve_telegram()
+    # 일반 텔레그램 문장은 일부 글자 선택이 어려운 기기가 있다. 주문만 별도
+    # 코드 상자로 먼저 보내면 상자의 복사 버튼으로 주문값 전체를 복사할 수 있다.
+    marker = "📋 복사용 주문\n"
+    copy_text = "주문 없음"
+    if marker in msg:
+        copy_text = msg.split(marker, 1)[1].split("\n\n", 1)[0].strip()
+    send_telegram_message(
+        f"<b>📋 복사용 주문</b>\n<pre>{html.escape(copy_text)}</pre>",
+        token=token, chat_id=chat_id, parse_mode="HTML",
+    )
     send_telegram_message(msg, token=token, chat_id=chat_id)
     return msg
