@@ -173,6 +173,9 @@ _URL_KEYS = {
     "br": ("buy_range_pct", None),   # % 로 넣고 소수로 바꾼다
     "lr": ("ladder_rungs", int),     # 사다리 칸 수
     "ls": ("ladder_step", None),     # % 로 넣고 소수로 바꾼다
+    # 프리셋을 구분하는 핵심값. 공유 서버 재접속 때도 URL에서 복원한다.
+    "rp": ("loss_reset_pct", None),
+    "rt": ("loss_reset_threshold_pct", None),
 }
 
 
@@ -206,7 +209,7 @@ def cfg_from_url(base: dict) -> dict:
         try:
             if key == "n":
                 cfg["daily_buy_pct"] = 1 / int(raw)
-            elif key in ("r", "f", "br", "ls"):
+            elif key in ("r", "f", "br", "ls", "rp", "rt"):
                 cfg[name] = float(raw) / 100
             elif key in ("ri", "mo"):
                 cfg[name] = raw not in ("0", "false", "False")
@@ -233,6 +236,8 @@ def cfg_to_url(cfg: dict, flows: list) -> None:
         "br": f"{cfg.get('buy_range_pct', 0.10) * 100:g}",
         "lr": f"{int(cfg.get('ladder_rungs', 0))}",
         "ls": f"{cfg.get('ladder_step', 0.03) * 100:g}",
+        "rp": f"{cfg.get('loss_reset_pct', 0.0) * 100:g}",
+        "rt": f"{cfg.get('loss_reset_threshold_pct', 0.0) * 100:g}",
     }
     if flows:
         params["c"] = flows_to_param(flows)
@@ -242,6 +247,19 @@ def cfg_to_url(cfg: dict, flows: list) -> None:
 if "cfg" not in st.session_state:
     st.session_state.cfg = cfg_from_url(load_config())
 cfg = st.session_state.cfg
+
+
+def matching_preset_name(config: dict) -> str:
+    """현재 숫자 설정과 같은 프리셋 이름. 직접 수정한 설정이면 균형형을 표시한다."""
+    keys = (
+        "daily_buy_pct", "target_return", "stop_days", "sell_day_buy_mode",
+        "loss_reset_pct", "loss_reset_threshold_pct", "ladder_rungs",
+        "ladder_step", "buy_range_pct",
+    )
+    for name, preset in PRESETS.items():
+        if all(config.get(key) == preset.get(key) for key in keys):
+            return name
+    return "균형형 ⭐ 추천"
 
 # 모든 프리셋이 공유하는 실행 원칙. 숫자와 리셋 규칙은 현재 설정에 맞춰 바뀐다.
 RULES_MD = """
@@ -518,7 +536,7 @@ with tab_home:
             quick_preset = st.selectbox(
                 "투자 성향",
                 list(PRESETS.keys()),
-                index=preset_index("균형형 ⭐ 추천"),
+                index=preset_index(matching_preset_name(cfg)),
                 key="quick_preset",
                 label_visibility="collapsed",
                 help="검증된 조합을 고른 뒤 오른쪽 버튼을 누르면 모든 전략값이 한 번에 적용됩니다.",
