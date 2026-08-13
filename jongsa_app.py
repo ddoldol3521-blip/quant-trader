@@ -5,6 +5,7 @@
 시작일부터 오늘까지를 매번 다시 계산해서 현재 상태와 오늘 할 일을 보여준다.
 """
 
+import json
 import sys
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
@@ -163,6 +164,7 @@ _URL_KEYS = {
     "t": ("ticker", str),
     "s": ("initial_cash", float),
     "n": ("daily_buy_pct", None),   # 분할수로 넣고 비율로 바꾼다
+    "dp": ("daily_buy_pct", None),  # 정확한 하루 매수비율(%) — n보다 우선
     "d": ("start_date", str),
     "r": ("target_return", None),   # %로 넣고 소수로 바꾼다
     "p": ("stop_days", int),
@@ -194,6 +196,31 @@ def flows_from_url() -> list:
     return out
 
 
+FLOWS_PATH = Path(__file__).resolve().parent / "jongsa_flows.json"
+
+
+def load_saved_flows() -> list:
+    """로컬 바로가기로 다시 실행해도 입출금 기록을 복원한다."""
+    if is_shared_server() or not FLOWS_PATH.exists():
+        return []
+    try:
+        raw = json.loads(FLOWS_PATH.read_text(encoding="utf-8"))
+        return [
+            {"날짜": pd.Timestamp(flow["날짜"]).date(), "금액": float(flow["금액"])}
+            for flow in raw
+        ]
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return []
+
+
+def save_flows(flows: list) -> None:
+    """공유 서버에서는 URL만, 로컬에서는 파일에도 입출금 기록을 저장한다."""
+    if is_shared_server():
+        return
+    data = [{"날짜": str(flow["날짜"]), "금액": float(flow["금액"])} for flow in flows]
+    FLOWS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def flows_to_param(flows: list) -> str:
     return ",".join(f"{f['날짜']}:{f['금액']:.0f}" for f in flows)
 
@@ -207,7 +234,9 @@ def cfg_from_url(base: dict) -> dict:
             continue
         raw = qp[key]
         try:
-            if key == "n":
+            if key == "dp":
+                cfg["daily_buy_pct"] = float(raw) / 100
+            elif key == "n" and "dp" not in qp:
                 cfg["daily_buy_pct"] = 1 / int(raw)
             elif key in ("r", "f", "br", "ls", "rp", "rt"):
                 cfg[name] = float(raw) / 100
@@ -226,6 +255,7 @@ def cfg_to_url(cfg: dict, flows: list) -> None:
         "t": cfg["ticker"],
         "s": f"{cfg['initial_cash']:.0f}",
         "n": f"{round(1 / cfg['daily_buy_pct'])}",
+        "dp": f"{cfg['daily_buy_pct'] * 100:g}",
         "d": cfg["start_date"],
         "r": f"{cfg['target_return'] * 100:g}",
         "p": f"{int(cfg['stop_days'])}",
@@ -435,7 +465,8 @@ ${keep_value:,.0f} ÷ 현재가 ${price} = **{keep_shares}주를 그대로 보�
         )
 
 if "flows" not in st.session_state:
-    st.session_state.flows = flows_from_url()
+    _url_flows = flows_from_url()
+    st.session_state.flows = _url_flows if _url_flows else load_saved_flows()
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -641,6 +672,7 @@ with tab_home:
         new_flows.sort(key=lambda f: f["날짜"])
         if new_flows != _flows:
             st.session_state.flows = new_flows
+            save_flows(new_flows)
             # 재실행이 아래의 공통 cfg_to_url보다 먼저 일어나므로 여기서 보존한다.
             cfg_to_url(cfg, new_flows)
             st.rerun()

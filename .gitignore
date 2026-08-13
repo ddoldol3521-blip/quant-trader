@@ -9,4 +9,6 @@ notify_schedule.json
 jongsa_positions.json
 jongsa_settings.json
 jongsa_notify.json
+jongsa_flows.json
 charts/
+.hfdata/
