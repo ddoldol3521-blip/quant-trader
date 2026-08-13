@@ -82,6 +82,28 @@ def settings() -> dict:
     }
 
 
+def copyable_order_lines(plan: dict) -> list[str]:
+    """설명 없이 증권사 주문창에 입력할 값만 한 줄씩 반환한다."""
+    forced, pending, buy = plan["강제매도"], plan["목표매도"], plan["매수"]
+    lines = []
+    reset = plan.get("손실리셋")
+    if reset:
+        if reset["팔수량"] > 0:
+            lines.append(f"MOC 매도 | {reset['팔수량']:,.0f}주")
+    else:
+        for od in forced:
+            lines.append(f"MOC 매도 | {od['qty']:,.0f}주")
+    for od in pending:
+        lines.append(f"LOC 매도 | {od['qty']:,.0f}주 | ${od['target_price']:,.2f}")
+    if buy["type"] in ("LOC", "LOC_RANGE"):
+        lines.append(f"LOC 매수 | {buy['qty']:,.0f}주 | ${buy['limit']:,.2f}")
+    elif buy["type"] == "MOC":
+        lines.append(f"MOC 매수 | {buy['qty']:,.0f}주")
+    for qty, price in buy.get("사다리", []):
+        lines.append(f"LOC 추가매수 | {qty:,.0f}주 | ${price:,.2f}")
+    return lines
+
+
 def build_message(today: date = None) -> str:
     """오늘 보낼 메시지 전체를 만든다."""
     s = settings()
@@ -153,6 +175,12 @@ def build_message(today: date = None) -> str:
     plan = order_plan(res.final_lots, res.final_cash, total - res.total_dividends, plan_cfg,
                       today.isoformat(), trading_dates=hist.index)
     forced, pending, buy = plan["강제매도"], plan["목표매도"], plan["매수"]
+
+    # 텔레그램에서 주문값만 드래그해 복사할 수 있도록 설명 없는 짧은 영역을
+    # 메시지 맨 위에 따로 만든다. 상세한 이유와 현황은 기존 본문에 남긴다.
+    copy_orders = copyable_order_lines(plan)
+    copy_block = ["📋 복사용 주문", *(copy_orders or ["주문 없음"]), ""]
+    L = L[:2] + copy_block + L[2:]
 
     L.append("【오늘 넣을 주문】")
     if not forced and not pending and not buy["type"]:
