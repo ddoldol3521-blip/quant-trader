@@ -287,7 +287,12 @@ def matching_preset_name(config: dict) -> str:
         "ladder_step", "buy_range_pct",
     )
     for name, preset in PRESETS.items():
-        if all(config.get(key) == preset.get(key) for key in keys):
+        def same_value(key):
+            actual, expected = config.get(key), preset.get(key)
+            if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
+                return abs(float(actual) - float(expected)) < 1e-9
+            return actual == expected
+        if all(same_value(key) for key in keys):
             return name
     return "균형형 ⭐ 추천"
 
@@ -562,12 +567,26 @@ with tab_home:
     with st.container(border=True):
         st.markdown('<div class="qm-section-title">내 투자 성향 고르기</div>', unsafe_allow_html=True)
         st.markdown('<div class="qm-muted">목록에서 하나를 고른 다음 파란 버튼을 눌러야 실제 설정에 반영됩니다.</div>', unsafe_allow_html=True)
+        _current_preset = matching_preset_name(cfg)
+        _preset_signature = tuple(
+            cfg.get(key) for key in (
+                "daily_buy_pct", "target_return", "stop_days", "sell_day_buy_mode",
+                "loss_reset_pct", "loss_reset_threshold_pct", "ladder_rungs",
+                "ladder_step", "buy_range_pct",
+            )
+        )
+        # selectbox의 브라우저 위젯 상태는 설정 파일과 별도로 남는다. 실제 설정이
+        # 바뀌었을 때만 선택 상자도 동기화해 "계산은 공격형, 표시는 균형형"을 막는다.
+        if st.session_state.get("_quick_preset_signature") != _preset_signature:
+            st.session_state._quick_preset_signature = _preset_signature
+            st.session_state.quick_preset = _current_preset
+        st.caption(f"현재 실제 적용: **{_current_preset}**")
         quick1, quick2 = st.columns([3, 1])
         with quick1:
             quick_preset = st.selectbox(
                 "투자 성향",
                 list(PRESETS.keys()),
-                index=preset_index(matching_preset_name(cfg)),
+                index=preset_index(_current_preset),
                 key="quick_preset",
                 label_visibility="collapsed",
                 help="검증된 조합을 고른 뒤 오른쪽 버튼을 누르면 모든 전략값이 한 번에 적용됩니다.",
