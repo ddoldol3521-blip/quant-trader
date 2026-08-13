@@ -31,6 +31,7 @@ ENV_KEYS = {
     "JONGSA_START": "시작일 (YYYY-MM-DD)",
     "JONGSA_SEED": "시드 달러",
     "JONGSA_SPLITS": "분할수",
+    "JONGSA_DAILY_PCT": "하루 신규 매수 비율 %",
     "JONGSA_TARGET": "목표수익률 %",
     "JONGSA_STOP": "청산 영업일",
     "JONGSA_FEE": "편도 수수료 %",
@@ -50,16 +51,19 @@ def env(name, default=None, cast=str):
         return default
 
 
-def settings() -> dict:
+def settings(base_config: dict = None) -> dict:
     """저장된 설정을 기본으로 쓰고, 환경변수가 있으면 그쪽을 우선한다."""
-    cfg = load_config()
+    cfg = dict(base_config) if base_config is not None else load_config()
     splits = env("JONGSA_SPLITS", None, int)
+    daily_pct = env("JONGSA_DAILY_PCT", None, float)
 
     return {
         "ticker": env("JONGSA_TICKER", cfg["ticker"]).upper(),
         "start": env("JONGSA_START", cfg["start_date"]),
         "seed": env("JONGSA_SEED", cfg["initial_cash"], float),
-        "daily_pct": 1 / splits if splits else cfg["daily_buy_pct"],
+        "daily_pct": daily_pct / 100 if daily_pct is not None else (
+            1 / splits if splits else cfg["daily_buy_pct"]
+        ),
         "tgt": env("JONGSA_TARGET", cfg["target_return"] * 100, float) / 100,
         "stop": env("JONGSA_STOP", cfg["stop_days"], int),
         "fee": env("JONGSA_FEE", cfg["fee_rate"] * 100, float) / 100,
@@ -104,9 +108,9 @@ def copyable_order_lines(plan: dict) -> list[str]:
     return lines
 
 
-def build_message(today: date = None) -> str:
+def build_message(today: date = None, config: dict = None, cash_flows: list = None) -> str:
     """오늘 보낼 메시지 전체를 만든다."""
-    s = settings()
+    s = settings(config)
     ticker, stop, rng = s["ticker"], s["stop"], s["rng"]
     if not s["start"]:
         raise ValueError("시작일이 비어 있습니다. 앱에서 시작일을 정하고 저장하세요.")
@@ -122,6 +126,7 @@ def build_message(today: date = None) -> str:
         ladder_rungs=s["ladder_rungs"], ladder_step=s["ladder_step"],
         loss_reset_pct=s["loss_reset_pct"],
         loss_reset_threshold_pct=s["loss_reset_threshold_pct"],
+        cash_flows=[(str(flow["날짜"]), float(flow["금액"])) for flow in (cash_flows or [])],
     )
 
     last = res.daily_log.iloc[-1]
@@ -263,9 +268,9 @@ def resolve_telegram() -> tuple:
     return load_telegram_config()
 
 
-def send_now(today: date = None) -> str:
+def send_now(today: date = None, config: dict = None, cash_flows: list = None) -> str:
     """지금 바로 한 통 보낸다. 보낸 내용을 돌려준다."""
-    msg = build_message(today)
+    msg = build_message(today, config=config, cash_flows=cash_flows)
     token, chat_id = resolve_telegram()
     send_telegram_message(msg, token=token, chat_id=chat_id)
     return msg

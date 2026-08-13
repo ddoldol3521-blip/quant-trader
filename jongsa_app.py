@@ -544,6 +544,8 @@ with tab_home:
         with quick2:
             if st.button("이 전략으로 설정", type="primary", width="stretch", key="quick_apply"):
                 apply_preset(cfg, quick_preset)
+                # 공유 서버는 파일에 저장하지 않으므로 재실행 전에 주소에 먼저 쓴다.
+                cfg_to_url(cfg, st.session_state.flows)
                 st.rerun()
         st.markdown(f"**쉽게 말하면:** {PRESETS[quick_preset]['설명']}")
         st.caption(preset_result_caption(PRESETS[quick_preset]))
@@ -639,6 +641,8 @@ with tab_home:
         new_flows.sort(key=lambda f: f["날짜"])
         if new_flows != _flows:
             st.session_state.flows = new_flows
+            # 재실행이 아래의 공통 cfg_to_url보다 먼저 일어나므로 여기서 보존한다.
+            cfg_to_url(cfg, new_flows)
             st.rerun()
 
         if _flows:
@@ -1557,6 +1561,7 @@ with tab_help:
         with pc2:
             if st.button("적용", type="primary", width="stretch"):
                 apply_preset(cfg, chosen)
+                cfg_to_url(cfg, st.session_state.flows)
                 st.rerun()
         st.caption(PRESETS[chosen]["설명"])
         st.caption(preset_result_caption(PRESETS[chosen]))
@@ -1678,6 +1683,7 @@ with tab_help:
                 "loss_reset_threshold_pct": lrt / 100,
             })
             save_config(cfg)
+            cfg_to_url(cfg, st.session_state.flows)
             st.rerun()
 
         st.markdown("### ⚠️ 알아둘 것")
@@ -1774,7 +1780,9 @@ else:
         with p1:
             if st.button("👀 메시지 미리보기", width="stretch"):
                 try:
-                    st.session_state.preview_msg = build_message()
+                    st.session_state.preview_msg = build_message(
+                        config=cfg, cash_flows=st.session_state.flows
+                    )
                 except (ValueError, RuntimeError) as e:
                     st.session_state.preview_msg = ""
                     st.error(f"메시지를 만들지 못했습니다 — {e}")
@@ -1782,7 +1790,9 @@ else:
             if st.button("📨 지금 한 통 보내기", width="stretch",
                          disabled=not (saved_token and saved_chat)):
                 try:
-                    st.session_state.preview_msg = send_now()
+                    st.session_state.preview_msg = send_now(
+                        config=cfg, cash_flows=st.session_state.flows
+                    )
                     st.success("보냈습니다. 텔레그램을 확인해보세요.")
                 except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
                     st.error(f"보내지 못했습니다 — {e}")

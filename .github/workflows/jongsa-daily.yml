@@ -35,11 +35,15 @@ jobs:
           JONGSA_START: ${{ secrets.JONGSA_START }}
           # 아래는 전략 설정이라 공개돼도 상관없다. 바꾸려면 이 값을 고치면 된다.
           JONGSA_TICKER: SOXL
-          JONGSA_SPLITS: "10"
-          JONGSA_TARGET: "2.75"
-          JONGSA_STOP: "10"
+          # 현재 실전 설정: 공격형
+          JONGSA_DAILY_PCT: "11"
+          JONGSA_TARGET: "2.7"
+          JONGSA_STOP: "16"
           JONGSA_FEE: "0"
           JONGSA_RANGE: "10"
+          JONGSA_LOSS_RESET: "10"
+          JONGSA_LOSS_THRESHOLD: "7.5"
+          JONGSA_LADDER_RUNGS: "0"
           # 앱 주소도 Secrets에 둔다 — 이 저장소가 공개라 여기 적으면
           # '링크 아는 사람만' 이라는 공개 설정이 의미가 없어진다.
           JONGSA_APP_URL: ${{ secrets.JONGSA_APP_URL }}
