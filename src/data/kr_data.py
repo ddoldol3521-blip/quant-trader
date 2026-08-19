@@ -1,7 +1,9 @@
 """주식 시세 데이터 수집 (FinanceDataReader 사용, 실패하면 yfinance로 대체)."""
 
+import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import pandas as pd
 
@@ -17,6 +19,7 @@ except Exception as _e:  # ImportError뿐 아니라 내부 초기화 오류까�
     FDR_IMPORT_ERROR = _e
 
 MAX_WORKERS = 10  # 동시에 받아올 종목 수 (너무 크면 차단될 수 있음)
+PRICE_OVERRIDES_PATH = Path(__file__).resolve().parents[2] / "jongsa_price_overrides.json"
 
 
 def _yf_symbols(code: str) -> list[str]:
@@ -73,19 +76,65 @@ def _clip(df: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
     return df
 
 
+def _apply_price_overrides(df: pd.DataFrame, code: str, start: str, end: str) -> pd.DataFrame:
+    """공급처에서 빠진 확정 일봉을 사용자가 확인한 값으로 보완한다.
+
+    일봉 공급처가 최신 거래일을 간혹 늦게 반영한다. 그 상태로 계산을 계속하면
+    실제로 끝난 매도가 앱에서는 보유 중으로 남는다. 보정값은 별도 JSON에 두어
+    소스코드 수정 없이 추가/삭제할 수 있게 한다.
+    """
+    if not PRICE_OVERRIDES_PATH.exists():
+        return df
+    try:
+        raw = json.loads(PRICE_OVERRIDES_PATH.read_text(encoding="utf-8"))
+        rows = raw.get(str(code).upper(), {})
+    except Exception:
+        return df
+
+    out = pd.DataFrame() if df is None else df.copy()
+    for day, values in rows.items():
+        ts = pd.Timestamp(day)
+        if not (pd.Timestamp(start) <= ts <= pd.Timestamp(end)):
+            continue
+        close = float(values["Close"])
+        for col in ("Open", "High", "Low", "Close"):
+            out.loc[ts, col] = float(values.get(col, close))
+        out.loc[ts, "Volume"] = float(values.get("Volume", 0))
+    return _clip(out.sort_index(), start, end)
+
+
 def get_kr_ohlcv(code: str, start: str, end: str) -> pd.DataFrame:
     """종목 하나의 일봉 OHLCV를 가져온다.
 
-    FinanceDataReader를 먼저 쓰고, 못 쓰거나 빈 값이면 yfinance로 넘어간다.
+    미국 종목은 FinanceDataReader가 값은 주면서 최신 일봉만 누락하는 경우가
+    있으므로 yfinance도 함께 확인하고 두 결과를 합친다. 같은 날짜는 yfinance를
+    우선하고, 마지막으로 사용자가 확인한 누락 일봉 보정값을 적용한다.
     """
+    frames = []
     if fdr is not None:
         try:
             df = _clip(fdr.DataReader(code, start, end), start, end)
             if df is not None and not df.empty:
-                return df
+                frames.append(df)
         except Exception:
-            pass  # 아래 yfinance로 재시도
-    return _clip(_yf_ohlcv(code, start, end), start, end)
+            pass
+
+    is_korean_code = code.isdigit() and len(code) == 6
+    # 한국 종목은 기존처럼 FDR 성공 시 추가 호출을 생략한다. 미국 종목은
+    # stale-but-nonempty 응답을 잡기 위해 두 공급처를 모두 확인한다.
+    if not frames or not is_korean_code:
+        try:
+            yf_df = _clip(_yf_ohlcv(code, start, end), start, end)
+            if yf_df is not None and not yf_df.empty:
+                frames.append(yf_df)
+        except Exception:
+            pass
+
+    if not frames:
+        raise ValueError(f"{code} 시세를 받지 못했습니다.")
+    merged = pd.concat(frames).sort_index()
+    merged = merged[~merged.index.duplicated(keep="last")]
+    return _apply_price_overrides(merged, code, start, end)
 
 
 def get_dividends(code: str, start: str, end: str) -> pd.Series:

@@ -10,5 +10,6 @@ jongsa_positions.json
 jongsa_settings.json
 jongsa_notify.json
 jongsa_flows.json
+jongsa_actual_fills.json
 charts/
 .hfdata/

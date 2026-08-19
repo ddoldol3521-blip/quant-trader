@@ -21,11 +21,12 @@ from src.data.kr_data import get_dividends, get_kr_ohlcv
 from src.jongsa_backtest import run_buy_and_hold, run_jongsa
 from src.jongsa_live import BUY_RANGE_SKIPS_15Y, BUY_RANGE_VS_NOLIMIT, PRESETS, SELL_DAY_MODES
 from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
-from src.jongsa_live import make_held_counter, order_plan, target_price_for
+from src.jongsa_live import is_us_market_open, make_held_counter, order_plan, target_price_for
 from src.jongsa_notify import build_message, send_now
 from src.scheduler import (JONGSA_TASK_NAME, get_jongsa_task_status, load_jongsa_notify_config,
                            register_jongsa_task, remove_jongsa_task, save_jongsa_notify_config)
 from src.telegram_notify import find_chat_id, load_telegram_config, save_telegram_config
+from src.trend_pulse import make_plan as make_trend_pulse_plan
 
 
 # 비교 탭 전용 연구 후보. 배포 서버가 모듈 두 개를 서로 다른 시점의 버전으로
@@ -225,6 +226,51 @@ def flows_to_param(flows: list) -> str:
     return ",".join(f"{f['날짜']}:{f['금액']:.0f}" for f in flows)
 
 
+ACTUAL_FILLS_PATH = Path(__file__).resolve().parent / "jongsa_actual_fills.json"
+
+
+def actual_fills_from_url() -> list:
+    """실제 매수 체결 기록. 형식: af=2026-08-18:35:127.39,..."""
+    out = []
+    for part in st.query_params.get("af", "").split(","):
+        bits = part.split(":")
+        if len(bits) != 3:
+            continue
+        try:
+            d = pd.Timestamp(bits[0]).date()
+            qty, price = float(bits[1]), float(bits[2])
+            if qty > 0 and price > 0:
+                out.append({"날짜": d, "수량": qty, "체결가": price})
+        except (TypeError, ValueError):
+            continue
+    return sorted(out, key=lambda x: x["날짜"])
+
+
+def load_saved_actual_fills() -> list:
+    if is_shared_server() or not ACTUAL_FILLS_PATH.exists():
+        return []
+    try:
+        raw = json.loads(ACTUAL_FILLS_PATH.read_text(encoding="utf-8"))
+        return sorted([
+            {"날짜": pd.Timestamp(x["날짜"]).date(), "수량": float(x["수량"]),
+             "체결가": float(x["체결가"])} for x in raw
+        ], key=lambda x: x["날짜"])
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return []
+
+
+def save_actual_fills(fills: list) -> None:
+    if is_shared_server():
+        return
+    data = [{"날짜": str(x["날짜"]), "수량": x["수량"], "체결가": x["체결가"]}
+            for x in fills]
+    ACTUAL_FILLS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def actual_fills_to_param(fills: list) -> str:
+    return ",".join(f"{x['날짜']}:{x['수량']:g}:{x['체결가']:g}" for x in fills)
+
+
 def cfg_from_url(base: dict) -> dict:
     """주소에 붙은 설정을 읽어 기본 설정 위에 덮어쓴다. 이상한 값은 무시한다."""
     cfg = dict(base)
@@ -271,12 +317,43 @@ def cfg_to_url(cfg: dict, flows: list) -> None:
     }
     if flows:
         params["c"] = flows_to_param(flows)
+    actual_fills = st.session_state.get("actual_fills", [])
+    if actual_fills:
+        params["af"] = actual_fills_to_param(actual_fills)
+    # 트렌드 펄스는 별도 탭·별도 설정이다. 퀀트믹스 설정을 저장해도
+    # 트렌드 펄스 URL 값이 사라지지 않게 보존한다.
+    for key, value in st.query_params.to_dict().items():
+        if str(key).startswith("pt"):
+            params[key] = value
+    st.query_params.from_dict(params)
+
+
+def pulse_cfg_from_url() -> dict:
+    """퀀트믹스와 섞이지 않는 트렌드 펄스 전용 설정."""
+    qp=st.query_params
+    out={"capital":10000.0,"today_open":0.0,"stops":0,"held":0}
+    for key,name,cast in (("ptc","capital",float),("pto","today_open",float),
+                          ("pts","stops",int),("pth","held",int)):
+        if key in qp:
+            try:
+                out[name]=cast(qp[key])
+            except (ValueError,TypeError):
+                pass
+    return out
+
+
+def pulse_cfg_to_url(pulse: dict) -> None:
+    params=st.query_params.to_dict()
+    params.update({"ptc":f"{pulse['capital']:g}","pto":f"{pulse['today_open']:g}",
+                   "pts":str(int(pulse['stops'])),"pth":str(int(pulse['held']))})
     st.query_params.from_dict(params)
 
 
 if "cfg" not in st.session_state:
     st.session_state.cfg = cfg_from_url(load_config())
 cfg = st.session_state.cfg
+if "pulse_cfg" not in st.session_state:
+    st.session_state.pulse_cfg=pulse_cfg_from_url()
 
 
 def matching_preset_name(config: dict) -> str:
@@ -472,6 +549,11 @@ ${keep_value:,.0f} ÷ 현재가 ${price} = **{keep_shares}주를 그대로 보�
 if "flows" not in st.session_state:
     _url_flows = flows_from_url()
     st.session_state.flows = _url_flows if _url_flows else load_saved_flows()
+if "actual_fills" not in st.session_state:
+    _url_actual_fills = actual_fills_from_url()
+    st.session_state.actual_fills = (
+        _url_actual_fills if _url_actual_fills else load_saved_actual_fills()
+    )
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -485,6 +567,19 @@ def load_price_history(ticker: str, start: str, end: str) -> pd.DataFrame:
         last_date = pd.Timestamp(hist.index[-1]).date()
         if last_date == ny_now.date() and ny_now.time() < dtime(16, 0):
             hist = hist.iloc[:-1]
+
+        # 최신 확정 거래일이 빠졌는데도 계산을 계속하면 실제 청산분이 보유 중으로
+        # 표시된다. 미국 현지 시각 기준 마지막 마감 거래일까지 반드시 확인한다.
+        candidate = ny_now.date() if ny_now.time() >= dtime(16, 0) else ny_now.date() - timedelta(days=1)
+        while not is_us_market_open(candidate.isoformat()):
+            candidate -= timedelta(days=1)
+        if pd.Timestamp(start).date() <= candidate:
+            available = {pd.Timestamp(x).date() for x in hist.index}
+            if candidate not in available:
+                raise RuntimeError(
+                    f"{ticker} 최신 확정 거래일({candidate.isoformat()}) 시세가 누락되었습니다. "
+                    "잘못된 주문을 막기 위해 계산을 중단했습니다. 시세 보정값을 확인해 주세요."
+                )
     return hist
 
 
@@ -497,7 +592,7 @@ def load_dividends(ticker: str, start: str, end: str) -> pd.Series:
 @st.cache_data(ttl=1800, show_spinner=False)
 def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode,
              reinvest, flows, buy_range=None, ladder_rungs=0, ladder_step=0.03,
-             loss_reset=0.0, loss_reset_threshold=0.0):
+             loss_reset=0.0, loss_reset_threshold=0.0, actual_buy_fills=()):
     """시작일부터 오늘까지 규칙대로 돌린다. 설정이 같으면 캐시에서 바로 나온다.
 
     today를 인자로 받는 이유: 캐시 키에 날짜가 들어가야 날이 바뀌는 순간
@@ -517,6 +612,7 @@ def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole,
         ladder_rungs=ladder_rungs, ladder_step=ladder_step,
         loss_reset_pct=loss_reset,
         loss_reset_threshold_pct=loss_reset_threshold,
+        actual_buy_fills=actual_buy_fills,
     )
     bh = run_buy_and_hold(
         hist, initial_cash=cash, fee_rate=fee, whole_shares=whole,
@@ -541,8 +637,8 @@ if is_shared_server():
         "이 설정 그대로 뜹니다 (주소창을 보면 설정값이 붙어 있습니다)."
     )
 
-tab_home, tab_compare, tab_year, tab_grid, tab_help, tab_notify = st.tabs(
-    ["📅 오늘 주문", "🏆 전략 비교", "📊 백테스트", "📋 매매 기록", "📖 사용법·설정", "🔔 알림"]
+tab_home, tab_pulse, tab_compare, tab_year, tab_grid, tab_help, tab_notify = st.tabs(
+    ["📅 퀀트믹스 주문", "⚡ 트렌드 펄스", "🏆 전략 비교", "📊 백테스트", "📋 매매 기록", "📖 사용법·설정", "🔔 알림"]
 )
 
 # ============================================================ 오늘 할 일
@@ -662,7 +758,7 @@ with tab_home:
         expanded=bool(_flows),
     ):
         st.caption(
-            "투자 도중에 돈을 더 넣거나 뺐다면 여기에 적으세요. **매매 기록은 여전히 필요 없습니다.** "
+            "투자 도중에 돈을 더 넣거나 뺐다면 여기에 적으세요. "
             "맨 아래 빈 줄에 입력하면 자동으로 한 줄이 늘어나고, 줄 왼쪽을 선택하고 Delete를 누르면 지워집니다."
         )
         _edit_df = pd.DataFrame(
@@ -702,6 +798,60 @@ with tab_home:
             # 스트림릿 마크다운은 $...$ 를 수식으로 읽어서 글자가 깨진다. 달러 기호를 escape.
             st.caption(f"입금 합계 **\\${_in:,.0f}** · 출금 합계 **\\${_out:,.0f}**")
 
+    # ---------- 실제 체결 정정 ----------
+    _actual_fills = st.session_state.actual_fills
+    with st.expander(
+        (f"✅ 실제 매수 체결가 반영 ({len(_actual_fills)}건)"
+         if _actual_fills else
+         "✅ LOC 거부·수동 매수가 있었다면 실제 체결가 입력"),
+        expanded=bool(_actual_fills),
+    ):
+        st.caption(
+            "평소에는 비워두세요. LOC 주문이 거부되어 주간장 등에서 대신 샀거나, "
+            "증권사 실제 체결가가 앱의 종가 가정과 다를 때만 입력합니다. "
+            "입력한 가격과 수량으로 보유원가·현금·다음 LOC 매도가를 다시 계산합니다."
+        )
+        actual_df = pd.DataFrame(
+            [{"미국 거래일": x["날짜"], "실제 수량": x["수량"], "실제 체결가($)": x["체결가"]}
+             for x in _actual_fills]
+            or [{"미국 거래일": None, "실제 수량": None, "실제 체결가($)": None}]
+        )
+        actual_edited = st.data_editor(
+            actual_df, width="stretch", hide_index=True, num_rows="dynamic",
+            key="actual_fill_editor",
+            column_config={
+                "미국 거래일": st.column_config.DateColumn(format="YYYY-MM-DD", width="medium"),
+                "실제 수량": st.column_config.NumberColumn(min_value=0.0, step=1.0, format="%.0f"),
+                "실제 체결가($)": st.column_config.NumberColumn(min_value=0.0, step=0.01, format="$%.2f"),
+            },
+        )
+        new_actual_fills = []
+        for _, row in actual_edited.iterrows():
+            if (pd.isna(row["미국 거래일"]) or pd.isna(row["실제 수량"])
+                    or pd.isna(row["실제 체결가($)"])):
+                continue
+            qty, fill_price = float(row["실제 수량"]), float(row["실제 체결가($)"])
+            if qty <= 0 or fill_price <= 0:
+                continue
+            new_actual_fills.append({
+                "날짜": pd.Timestamp(row["미국 거래일"]).date(),
+                "수량": qty,
+                "체결가": fill_price,
+            })
+        new_actual_fills.sort(key=lambda x: x["날짜"])
+        if new_actual_fills != _actual_fills:
+            st.session_state.actual_fills = new_actual_fills
+            save_actual_fills(new_actual_fills)
+            cfg_to_url(cfg, st.session_state.flows)
+            st.rerun()
+        if _actual_fills:
+            last_fill = _actual_fills[-1]
+            corrected_target = target_price_for(last_fill["체결가"], cfg)
+            st.success(
+                f"최근 반영: **{last_fill['날짜']} · {last_fill['수량']:,.0f}주 × "
+                f"\\${last_fill['체결가']:,.2f}** → 목표 LOC 매도가 **\\${corrected_target:,.2f}**"
+            )
+
     # 설정이 바뀌면 조용히 저장해둔다 (다음에 열 때 그대로 뜨도록)
     new_cfg = {
         "ticker": ticker, "initial_cash": float(seed), "daily_buy_pct": daily_pct,
@@ -715,6 +865,10 @@ with tab_home:
 
     # ============================================================ 계산
     flow_tuples = tuple((str(f["날짜"]), float(f["금액"])) for f in st.session_state.flows)
+    actual_fill_tuples = tuple(
+        (str(x["날짜"]), float(x["수량"]), float(x["체결가"]))
+        for x in st.session_state.actual_fills
+    )
     recent = None   # 계산이 안 될 때만 쓰는 최근 시세
     try:
         with st.spinner("계산 중..."):
@@ -727,6 +881,7 @@ with tab_home:
                 int(cfg.get("ladder_rungs", 0)), float(cfg.get("ladder_step", 0.03)),
                 float(cfg.get("loss_reset_pct", 0.0)),
                 float(cfg.get("loss_reset_threshold_pct", 0.0)),
+                actual_fill_tuples,
             )
     except Exception as e:
         ready = False   # 아래 탭들이 쓸 계산 결과가 없다는 뜻
@@ -1903,3 +2058,130 @@ else:
             "봇 토큰은 `telegram_config.json`, 알림 설정은 `jongsa_notify.json`에 "
             "저장되며 둘 다 깃허브에 올라가지 않습니다."
         )
+
+# ============================================================ 트렌드 펄스
+with tab_pulse:
+    st.markdown("## ⚡ SOXL 트렌드 펄스")
+    st.caption(
+        "퀀트믹스와 자금·설정·주문이 완전히 분리된 하루 보유 돌파전략입니다. "
+        "어제 산 물량은 오늘 시가에 팔고, 오늘 돌파매수한 물량은 다음 거래일 시가에 팝니다."
+    )
+    st.info(
+        "**한 문장으로:** 시장이 좋으면 크게, 많이 하락했으면 작게, 통계상 위험한 날이면 쉬고, "
+        "SOXL이 실제로 위로 돌파할 때만 삽니다."
+    )
+
+    pcfg=st.session_state.pulse_cfg
+    p1,p2,p3,p4=st.columns(4)
+    with p1:
+        pulse_capital=st.number_input(
+            "트렌드 펄스 전용자금($)",min_value=100.0,value=float(pcfg["capital"]),step=1000.0,
+            help="퀀트믹스 자금과 별도로 배정한 금액입니다.",key="pulse_capital_input")
+    with p2:
+        pulse_open=st.number_input(
+            "오늘 미국 정규장 시가($)",min_value=0.0,value=float(pcfg["today_open"]),step=0.01,format="%.2f",
+            help="미국 정규장이 열린 뒤 확인한 SOXL 시가를 입력하세요. 한국시간 밤 또는 새벽 날짜가 아니라 미국 거래일의 시가입니다.",
+            key="pulse_open_input")
+    with p3:
+        pulse_stops=st.number_input(
+            "최근 연속 손절 횟수",min_value=0,max_value=2,value=int(pcfg["stops"]),step=1,
+            help="수비모드 비중 계산용입니다. 손절이 없었으면 0, 직전 수비거래가 손절이면 1, 두 번 이상 연속이면 2입니다.",
+            key="pulse_stops_input")
+    with p4:
+        pulse_held=st.number_input(
+            "어제부터 보유한 수량",min_value=0,value=int(pcfg["held"]),step=1,
+            help="전날 트렌드 펄스로 산 SOXL 수량입니다. 오늘 시가에 먼저 전량 매도합니다.",key="pulse_held_input")
+
+    if st.button("⚡ 오늘 트렌드 펄스 주문 계산",type="primary",width="stretch",key="pulse_calc"):
+        pcfg.update({"capital":float(pulse_capital),"today_open":float(pulse_open),
+                     "stops":int(pulse_stops),"held":int(pulse_held)})
+        pulse_cfg_to_url(pcfg)
+        if pulse_open<=0:
+            st.session_state.pop("pulse_plan",None)
+            st.error("미국 정규장 시가를 입력해 주세요.")
+        else:
+            try:
+                with st.spinner("최근 5년 시세와 오늘 모드를 계산하고 있습니다..."):
+                    pulse_hist=load_price_history("SOXL","2010-01-01",date.today().isoformat())
+                    st.session_state.pulse_plan=make_trend_pulse_plan(
+                        pulse_hist,float(pulse_open),float(pulse_capital),int(pulse_stops))
+            except (ValueError,RuntimeError,OSError) as ex:
+                st.session_state.pop("pulse_plan",None)
+                st.error(f"계산하지 못했습니다 — {ex}")
+
+    plan=st.session_state.get("pulse_plan")
+    if plan is None:
+        st.markdown("### 사용하는 순서")
+        st.markdown(
+            "1. 미국 정규장이 열리면 **SOXL 시가**를 입력합니다.\n"
+            "2. 전날 산 물량이 있으면 **보유 수량**을 입력합니다.\n"
+            "3. 계산 버튼을 누르고 표시된 매도·매수·손절 주문을 넣습니다.\n"
+            "4. 오늘 산 물량은 다음 미국 거래일 시가에 전량 매도합니다."
+        )
+    else:
+        mode_color={"공격":"🟢","수비":"🟡","관망":"⚪"}.get(plan.mode,"⚪")
+        st.markdown(f"### {mode_color} 오늘은 **{plan.mode}모드**")
+        st.caption(plan.mode_reason)
+        m1,m2,m3,m4=st.columns(4)
+        m1.metric("현재 모드",plan.mode)
+        m2.metric("50일 고점 대비",f"{plan.drawdown_pct:+.1f}%")
+        m3.metric("전일 IBS",f"{plan.ibs:.2f}")
+        m4.metric("위험순위",("계산 전" if plan.risk_percentile is None else f"하위 {plan.risk_percentile:.1f}%"))
+
+        st.markdown("### 📋 오늘 넣을 주문")
+        orders=[]
+        if int(pulse_held)>0:
+            orders.append(f"1) SOXL {int(pulse_held)}주 MOO 매도 — 오늘 시가에 전량 청산")
+        if plan.mode=="관망":
+            orders.append("신규 매수 없음 — 오늘은 현금으로 쉽니다")
+        else:
+            number=2 if int(pulse_held)>0 else 1
+            orders.append(
+                f"{number}) SOXL {plan.breakout_shares}주 돌파매수 — 가격이 ${plan.breakout_price:.2f}에 도달하면 조건부/시장가 매수")
+            orders.append(
+                f"{number+1}) 체결되면 손절매도 — ${plan.stop_price:.2f} (매수가 대비 -{plan.stop_pct:.0f}%)")
+            if plan.loc_price is not None:
+                orders.append(
+                    f"{number+2}) SOXL {plan.loc_shares}주 LOC 매수 — 종가가 ${plan.loc_price:.2f} 이하일 때")
+            orders.append("마지막) 오늘 체결된 물량은 다음 거래일 시가에 전량 매도")
+        st.code("\n".join(orders),language=None)
+
+        if plan.mode=="공격":
+            st.success(
+                f"상승추세가 살아 있어 전용자금의 **{plan.weight_pct:.1f}%**를 돌파가격에 주문합니다. "
+                "공격모드에는 급락 LOC 주문을 사용하지 않습니다."
+            )
+        elif plan.mode=="수비":
+            st.warning(
+                f"최근 고점에서 크게 하락해 전용자금의 **{plan.weight_pct:.1f}%**만 돌파주문에 사용합니다. "
+                "LOC도 같은 금액으로 별도 주문하므로 두 주문을 동시에 걸 수 있는 현금을 남겨 두세요."
+            )
+        else:
+            st.info("공격·수비 조건보다 관망 필터가 우선했습니다. 기존 보유분만 시가에 정리하고 신규매수는 하지 않습니다.")
+
+        with st.expander("왜 이 모드와 가격이 나왔나요? · 초보자 설명"):
+            st.markdown(
+                f"- 전일 종가: **${plan.close:.2f}**\n"
+                f"- 최근 50거래일 고점: **${plan.peak50:.2f}**\n"
+                f"- 고점 대비 하락률: **{plan.drawdown_pct:+.1f}%**\n\n"
+                "고점 대비 30% 이내이면 공격후보, 30% 넘게 하락했으면 수비후보입니다. "
+                "그 뒤 최근 60일 변동성과 전일 종가 위치(IBS)가 과거 최악의 10% 조건인지 확인해, "
+                "해당하면 공격·수비 대신 관망합니다."
+            )
+            if plan.breakout_price is not None:
+                st.markdown(
+                    f"**돌파가격 계산:** 오늘 시가 ${pulse_open:.2f} + "
+                    f"(전일 고가−저가) × {plan.k:.1f} = **${plan.breakout_price:.2f}**"
+                )
+
+    st.divider()
+    st.markdown("### 📊 복원 후보의 과거 결과")
+    r1,r2,r3=st.columns(3)
+    r1.metric("과거 CAGR","73.91%")
+    r2.metric("과거 MDD","-34.00%")
+    r3.metric("과거 승률","56.99%")
+    st.warning(
+        "이 수치는 공개 주문표를 바탕으로 재구성한 후보의 과거 백테스트입니다. 원작의 정확한 비공개 공식이 아니며, "
+        "과최적화·분봉 손절순서·실제 체결오차 때문에 미래 성과는 크게 낮아질 수 있습니다. "
+        "실전에서는 CAGR 30%에서 50%, MDD -45%에서 -60%까지 보수적으로 가정하세요."
+    )

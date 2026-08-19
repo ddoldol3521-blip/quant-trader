@@ -13,6 +13,7 @@ V4의 복리 로직은 원문이 모호해서 여러 해석을 옵션으로 뒀�
 
 from dataclasses import dataclass, field
 
+import math
 import numpy as np
 import pandas as pd
 
@@ -43,6 +44,8 @@ class Lot:
     # 리셋을 안 쓰면(loss_reset_pct=0) 둘은 언제나 같다.
     strategy_basis_price: float = None
     origin: str = "normal_buy"   # normal_buy | loss_reset
+    expiry_day_idx: int = None
+    residual_exit: bool = False
 
     def __post_init__(self):
         if self.strategy_basis_price is None:
@@ -76,6 +79,15 @@ class JongsaResult:
     # 한 번도 안 맞은 것이다. 설정을 켰는데 0이면 뭔가 잘못된 것이다.
     loss_reset_days: int = 0
     loss_reset_kept_qty: float = 0.0
+    overlay_entries: int = 0
+    overlay_target_exits: int = 0
+    overlay_expired_exits: int = 0
+    overlay_stop_exits: int = 0
+    overlay_events: list = field(default_factory=list)
+    max_overlay_exposure_pct: float = 0.0
+    avg_overlay_exposure_pct: float = 0.0
+    max_overlay_lots: int = 0
+    total_realized_tax: float = 0.0
     final_value: float = 0.0
     # ----- 중간 입출금 관련 -----
     # 입출금이 있으면 '총자산 / 시드 - 1'은 수익률이 아니게 된다.
@@ -191,10 +203,45 @@ def run_jongsa(
     version: str = "V5",
     initial_cash: float = 10_000.0,
     target_return: float = 0.0275,
+    dynamic_target_vol_days: int = 0,
+    dynamic_target_vol_multiple: float = 0.0,
+    dynamic_target_min: float = 0.0,
+    dynamic_target_max: float = 0.0,
+    base_target_signal=None,
+    base_target_threshold: float = 0.0,
+    base_target_below_threshold: float = 0.0,
+    base_target_above_threshold: float = 0.0,
+    base_buy_max_prior_rsi: float = 0.0,
+    base_buy_allocation_signal=None,
+    base_buy_allocation_threshold: float = 0.0,
+    base_buy_pct_below_threshold: float = 0.0,
+    base_buy_pct_above_threshold: float = 0.0,
+    base_daily_buy_pct_signal=None,
+    base_cash_low_threshold: float = 0.0,
+    base_cash_low_buy_pct: float = 0.0,
+    base_cash_high_threshold: float = 0.0,
+    base_cash_high_buy_pct: float = 0.0,
+    base_cash_low_target_return: float = 0.0,
+    base_cash_high_target_return: float = 0.0,
+    base_lot_count_low_threshold: int = 0,
+    base_lot_count_low_buy_pct: float = 0.0,
+    base_lot_count_high_threshold: int = 0,
+    base_lot_count_high_buy_pct: float = 0.0,
     daily_buy_pct: float = 0.10,
     compound_ratio: float = 0.70,
     n_splits: int = 10,
     stop_days: int = 10,
+    base_late_target_after_days: int = 0,
+    base_late_target_return: float = 0.0,
+    base_expiry_sell_fraction: float = 1.0,
+    base_residual_hold_days: int = 0,
+    base_residual_target_return: float = 0.0,
+    base_residual_extension_signal=None,
+    base_residual_extension_threshold: float = 0.0,
+    base_residual_min_cash_pct: float = 0.0,
+    base_residual_max_exposure_pct: float = 0.0,
+    base_residual_min_lot_return=None,
+    base_residual_max_lot_return=None,
     fee_rate: float = 0.0,
     whole_shares: bool = False,
     v4_mode: str = "rolling_replace",
@@ -207,10 +254,72 @@ def run_jongsa(
     cash_flows=None,
     order_sized_qty: bool = True,
     dividends=None,
+    actual_buy_fills=None,
     ladder_rungs: int = 0,
     ladder_step: float = 0.03,
     loss_reset_pct: float = 0.0,
     loss_reset_threshold_pct: float = 0.0,
+    overlay_dip_pct: float = 0.0,
+    overlay_target_pct: float = 0.0,
+    overlay_hold_days: int = 0,
+    overlay_late_target_pct: float = 0.0,
+    overlay_late_target_after_days: int = 0,
+    overlay_partial_target_pct: float = 0.0,
+    overlay_partial_exit_fraction: float = 0.0,
+    overlay_trailing_activation_pct: float = 0.0,
+    overlay_trailing_drawdown_pct: float = 0.0,
+    overlay_stop_loss_pct: float = 0.0,
+    overlay_entry_pct: float = 0.0,
+    overlay_cap_pct: float = 0.0,
+    overlay_entry_cooldown_days: int = 0,
+    overlay_fee_rate: float | None = None,
+    overlay_buy_execution_buffer_pct: float = 0.0,
+    overlay_sell_execution_buffer_pct: float = 0.0,
+    overlay_buy_fill_probability: float = 1.0,
+    overlay_sell_fill_probability: float = 1.0,
+    overlay_random_seed: int = 0,
+    overlay_trend_ma_days: int = 0,
+    overlay_trend_ma_slope_days: int = 0,
+    overlay_trend_signal=None,
+    overlay_regime_signal=None,
+    overlay_regime_switch: bool = False,
+    overlay_bear_dip_pct: float = 0.0,
+    overlay_bear_target_pct: float = 0.0,
+    overlay_bear_hold_days: int = 0,
+    overlay_bear_entry_pct: float = 0.0,
+    overlay_bear_cap_pct: float = 0.0,
+    overlay_bear_max_prior_rsi: float = 0.0,
+    overlay_max_prior_drawdown_pct: float = 0.0,
+    overlay_rsi_days: int = 14,
+    overlay_bear_rsi_days: int = 0,
+    overlay_rsi_method: str = "wilder",
+    overlay_min_prior_rsi: float = 0.0,
+    overlay_max_prior_rsi: float = 0.0,
+    overlay_deep_rsi_threshold: float = 0.0,
+    overlay_deep_entry_pct: float = 0.0,
+    overlay_entry_size_signal=None,
+    overlay_entry_size_threshold: float = 0.0,
+    overlay_entry_size_above_pct: float = 0.0,
+    overlay_entry_size_below_pct: float = 0.0,
+    overlay_volatility_days: int = 0,
+    overlay_volatility_method: str = "rolling_std",
+    overlay_volatility_multiple: float = 0.0,
+    overlay_volatility_signal=None,
+    overlay_min_dip_pct: float = 0.0,
+    overlay_cumulative_lookback_days: int = 0,
+    overlay_cumulative_dip_pct: float = 0.0,
+    overlay_prior_day_signal_dip_pct: float = 0.0,
+    overlay_next_day_discount_pct: float = 0.0,
+    overlay_recovery_lookback_days: int = 0,
+    overlay_recovery_crash_pct: float = 0.0,
+    overlay_recovery_rebound_pct: float = 0.0,
+    overlay_filter_signal=None,
+    overlay_filter_signal_min: float = 0.0,
+    overlay_filter_signal_max: float = 0.0,
+    overlay_open_gap_min: float | None = None,
+    overlay_open_gap_max: float | None = None,
+    annual_realized_tax_rate: float = 0.0,
+    annual_tax_exemption: float = 0.0,
     dd_thresholds=(-0.20, -0.25, -0.30),
 ) -> JongsaResult:
     """종사종팔 백테스트.
@@ -252,14 +361,150 @@ def run_jongsa(
     """
     df = clean_prices(df)
     close = df["Close"].astype(float).values
+    open_prices = (
+        df["Open"].astype(float).values if "Open" in df.columns else None
+    )
     dates = df.index
     n = len(close)
     if n < 1:
         raise ValueError("해당 기간에 거래일이 없습니다.")
 
+    close_series = pd.Series(close, index=dates)
+    overlay_trend_series = close_series
+    if overlay_trend_signal is not None:
+        overlay_trend_series = pd.Series(overlay_trend_signal).reindex(
+            dates
+        ).ffill().astype(float)
+    overlay_ma = (
+        overlay_trend_series.rolling(overlay_trend_ma_days).mean().to_numpy()
+        if overlay_trend_ma_days > 0 else None
+    )
+    overlay_trend_values = overlay_trend_series.to_numpy()
+    overlay_regime_values = None
+    if overlay_regime_signal is not None:
+        overlay_regime_values = pd.Series(overlay_regime_signal).reindex(
+            dates
+        ).ffill().to_numpy(dtype=float)
+    overlay_filter_values = None
+    if overlay_filter_signal is not None:
+        overlay_filter_values = pd.Series(overlay_filter_signal).reindex(
+            dates
+        ).ffill().to_numpy(dtype=float)
+    overlay_entry_size_values = None
+    if overlay_entry_size_signal is not None:
+        overlay_entry_size_values = pd.Series(
+            overlay_entry_size_signal
+        ).reindex(dates).ffill().to_numpy(dtype=float)
+    base_buy_allocation_values = None
+    if base_buy_allocation_signal is not None:
+        base_buy_allocation_values = pd.Series(
+            base_buy_allocation_signal
+        ).reindex(dates).ffill().to_numpy(dtype=float)
+    base_daily_buy_pct_values = None
+    if base_daily_buy_pct_signal is not None:
+        base_daily_buy_pct_values = pd.Series(
+            base_daily_buy_pct_signal
+        ).reindex(dates).ffill().to_numpy(dtype=float)
+    base_target_values = None
+    if base_target_signal is not None:
+        base_target_values = pd.Series(base_target_signal).reindex(
+            dates
+        ).ffill().to_numpy(dtype=float)
+    base_residual_extension_values = None
+    if base_residual_extension_signal is not None:
+        base_residual_extension_values = pd.Series(
+            base_residual_extension_signal
+        ).reindex(dates).ffill().to_numpy(dtype=float)
+    overlay_prior_peak = close_series.cummax().to_numpy()
+    overlay_delta = close_series.diff()
+    if overlay_rsi_method.lower() == "sma":
+        overlay_avg_gain = overlay_delta.clip(lower=0).rolling(
+            overlay_rsi_days, min_periods=overlay_rsi_days
+        ).mean()
+        overlay_avg_loss = (-overlay_delta.clip(upper=0)).rolling(
+            overlay_rsi_days, min_periods=overlay_rsi_days
+        ).mean()
+    else:
+        overlay_avg_gain = overlay_delta.clip(lower=0).ewm(
+            alpha=1 / overlay_rsi_days, adjust=False,
+            min_periods=overlay_rsi_days
+        ).mean()
+        overlay_avg_loss = (-overlay_delta.clip(upper=0)).ewm(
+            alpha=1 / overlay_rsi_days, adjust=False,
+            min_periods=overlay_rsi_days
+        ).mean()
+    overlay_rs = overlay_avg_gain / overlay_avg_loss.replace(0, np.nan)
+    overlay_rsi_series = 100 - 100 / (1 + overlay_rs)
+    overlay_rsi_series = overlay_rsi_series.mask(
+        (overlay_avg_loss == 0) & (overlay_avg_gain > 0), 100.0
+    ).mask((overlay_avg_gain == 0) & (overlay_avg_loss > 0), 0.0)
+    overlay_rsi = overlay_rsi_series.to_numpy()
+    overlay_bear_rsi = None
+    if overlay_bear_rsi_days > 0 and overlay_bear_rsi_days != overlay_rsi_days:
+        if overlay_rsi_method.lower() == "sma":
+            bear_avg_gain = overlay_delta.clip(lower=0).rolling(
+                overlay_bear_rsi_days, min_periods=overlay_bear_rsi_days
+            ).mean()
+            bear_avg_loss = (-overlay_delta.clip(upper=0)).rolling(
+                overlay_bear_rsi_days, min_periods=overlay_bear_rsi_days
+            ).mean()
+        else:
+            bear_avg_gain = overlay_delta.clip(lower=0).ewm(
+                alpha=1 / overlay_bear_rsi_days, adjust=False,
+                min_periods=overlay_bear_rsi_days
+            ).mean()
+            bear_avg_loss = (-overlay_delta.clip(upper=0)).ewm(
+                alpha=1 / overlay_bear_rsi_days, adjust=False,
+                min_periods=overlay_bear_rsi_days
+            ).mean()
+        bear_rs = bear_avg_gain / bear_avg_loss.replace(0, np.nan)
+        bear_rsi_series = 100 - 100 / (1 + bear_rs)
+        bear_rsi_series = bear_rsi_series.mask(
+            (bear_avg_loss == 0) & (bear_avg_gain > 0), 100.0
+        ).mask((bear_avg_gain == 0) & (bear_avg_loss > 0), 0.0)
+        overlay_bear_rsi = bear_rsi_series.to_numpy()
+    overlay_returns = close_series.pct_change()
+    if overlay_volatility_signal is not None:
+        overlay_volatility = pd.Series(overlay_volatility_signal).reindex(
+            dates
+        ).ffill().to_numpy(dtype=float)
+    elif overlay_volatility_days > 1:
+        if overlay_volatility_method.lower() == "ewma":
+            overlay_volatility = overlay_returns.ewm(
+                span=overlay_volatility_days,
+                min_periods=overlay_volatility_days,
+                adjust=False,
+            ).std().to_numpy()
+        elif overlay_volatility_method.lower() == "downside":
+            overlay_volatility = overlay_returns.clip(upper=0).pow(2).rolling(
+                overlay_volatility_days
+            ).mean().pow(.5).to_numpy()
+        else:
+            overlay_volatility = overlay_returns.rolling(
+                overlay_volatility_days
+            ).std().to_numpy()
+    else:
+        overlay_volatility = None
+    dynamic_target_volatility = (
+        close_series.pct_change().rolling(dynamic_target_vol_days).std().to_numpy()
+        if dynamic_target_vol_days > 1 else None
+    )
+
     cash = float(initial_cash)
     shares = 0.0
     open_lots: list[Lot] = []
+    overlay_lots: list[dict] = []
+    overlay_entries = 0
+    overlay_target_exits = 0
+    overlay_expired_exits = 0
+    overlay_stop_exits = 0
+    overlay_events = []
+    overlay_exposure = np.zeros(n)
+    overlay_lot_counts = np.zeros(n, dtype=int)
+    overlay_last_entry_idx = -10**9
+    overlay_rng = np.random.default_rng(overlay_random_seed)
+    taxable_realized_by_year: dict[int, float] = {}
+    total_realized_tax = 0.0
     trades = []
 
     equity = np.zeros(n)
@@ -285,11 +530,115 @@ def run_jongsa(
     pending_withdrawal = 0.0              # 예수금이 모자라 아직 못 뺀 출금액
 
     div_by_idx = _resolve_dividends(dividends, dates)
+    # 실전 장부에서는 LOC가 거부되거나 수동으로 대체 매수한 경우가 있다.
+    # 날짜별 실제 체결가/수량을 넘기면 이론 종가 체결 대신 그 값으로 계좌를
+    # 이어간다. 백테스트 호출은 기본값(None)이므로 과거 성과에는 영향이 없다.
+    actual_fills = {}
+    for raw in actual_buy_fills or []:
+        try:
+            d, qty, fill_price = raw
+            actual_fills[pd.Timestamp(d).normalize()] = (float(qty), float(fill_price))
+        except (TypeError, ValueError):
+            continue
     dividend_cash = 0.0        # 받은 배당. 따로 둔다 — 매매에 쓰지 않는다
     dividend_arr = np.zeros(n)
 
     for t in range(n):
         price = close[t]
+        effective_daily_buy_pct = daily_buy_pct
+        if (
+            base_daily_buy_pct_values is not None
+            and t > 0
+            and np.isfinite(base_daily_buy_pct_values[t - 1])
+            and base_daily_buy_pct_values[t - 1] > 0
+        ):
+            effective_daily_buy_pct = base_daily_buy_pct_values[t - 1]
+        prior_cash_ratio = cash / max(prev_total_assets, 1e-9)
+        prior_lot_count = len(open_lots)
+        if (
+            base_lot_count_low_threshold > 0
+            and base_lot_count_low_buy_pct > 0
+            and prior_lot_count <= base_lot_count_low_threshold
+        ):
+            effective_daily_buy_pct = base_lot_count_low_buy_pct
+        elif (
+            base_lot_count_high_threshold > 0
+            and base_lot_count_high_buy_pct > 0
+            and prior_lot_count >= base_lot_count_high_threshold
+        ):
+            effective_daily_buy_pct = base_lot_count_high_buy_pct
+        if (
+            base_cash_low_threshold > 0
+            and base_cash_low_buy_pct > 0
+            and prior_cash_ratio <= base_cash_low_threshold
+        ):
+            effective_daily_buy_pct = base_cash_low_buy_pct
+        elif (
+            base_cash_high_threshold > 0
+            and base_cash_high_buy_pct > 0
+            and prior_cash_ratio >= base_cash_high_threshold
+        ):
+            effective_daily_buy_pct = base_cash_high_buy_pct
+        # External prior-day risk/allocation signals have final priority over
+        # endogenous cash acceleration. A risky market must never be overridden
+        # merely because the account currently holds a lot of cash.
+        if (
+            base_buy_allocation_values is not None
+            and base_buy_allocation_threshold > 0
+            and base_buy_pct_below_threshold > 0
+            and base_buy_pct_above_threshold > 0
+            and t > 0
+            and np.isfinite(base_buy_allocation_values[t - 1])
+        ):
+            effective_daily_buy_pct = (
+                base_buy_pct_above_threshold
+                if base_buy_allocation_values[t - 1]
+                >= base_buy_allocation_threshold
+                else effective_daily_buy_pct
+            )
+        effective_target_return = target_return
+        if (
+            base_cash_low_threshold > 0
+            and base_cash_low_target_return > 0
+            and prior_cash_ratio <= base_cash_low_threshold
+        ):
+            effective_target_return = base_cash_low_target_return
+        elif (
+            base_cash_high_threshold > 0
+            and base_cash_high_target_return > 0
+            and prior_cash_ratio >= base_cash_high_threshold
+        ):
+            effective_target_return = base_cash_high_target_return
+        if (
+            base_target_values is not None
+            and base_target_threshold > 0
+            and base_target_below_threshold > 0
+            and base_target_above_threshold > 0
+            and t > 0
+            and np.isfinite(base_target_values[t - 1])
+        ):
+            effective_target_return = (
+                base_target_above_threshold
+                if base_target_values[t - 1] >= base_target_threshold
+                else base_target_below_threshold
+            )
+        if (
+            dynamic_target_volatility is not None
+            and dynamic_target_vol_multiple > 0
+            and t > 0
+            and np.isfinite(dynamic_target_volatility[t - 1])
+        ):
+            effective_target_return = (
+                dynamic_target_volatility[t - 1] * dynamic_target_vol_multiple
+            )
+            if dynamic_target_min > 0:
+                effective_target_return = max(
+                    dynamic_target_min, effective_target_return
+                )
+            if dynamic_target_max > 0:
+                effective_target_return = min(
+                    dynamic_target_max, effective_target_return
+                )
         sell_qty_today = 0.0
         sell_amt_today = 0.0
         sell_reasons: list[str] = []
@@ -333,6 +682,142 @@ def run_jongsa(
                 )
         applied_flows[t] = flow_today
 
+        # Values known before today's closing auction.  Overlay order quantity
+        # must not depend on today's close or on same-close sale proceeds.
+        overlay_known_cash = cash
+        overlay_known_value = sum(
+            lot["qty"] * (close[t - 1] if t > 0 else price)
+            for lot in overlay_lots
+        )
+
+        # Optional research overlay. It shares the real cash account with the
+        # base strategy, preventing the same cash from being allocated twice.
+        overlay_fee = fee_rate if overlay_fee_rate is None else overlay_fee_rate
+        if overlay_dip_pct > 0 and overlay_lots:
+            overlay_remaining = []
+            for overlay_lot in overlay_lots:
+                overlay_age = t - overlay_lot["buy_day_idx"]
+                overlay_effective_target_pct = overlay_lot.get(
+                    "target_pct", overlay_target_pct
+                )
+                if (
+                    overlay_lot.get("late_target_after_days", 0) > 0
+                    and overlay_age >= overlay_lot["late_target_after_days"]
+                    and overlay_lot.get("late_target_pct", 0) > 0
+                ):
+                    overlay_effective_target_pct = overlay_lot["late_target_pct"]
+                overlay_hit_signal = (
+                    overlay_age >= 1
+                    and price >= overlay_lot["buy_price"] * (
+                        1 + overlay_effective_target_pct
+                    ) * (
+                        1 + overlay_sell_execution_buffer_pct
+                    )
+                )
+                overlay_hit = (
+                    overlay_hit_signal
+                    and overlay_rng.random() <= overlay_sell_fill_probability
+                )
+                overlay_partial_hit_signal = (
+                    not overlay_lot.get("partial_done", False)
+                    and 0 < overlay_partial_target_pct
+                    < overlay_lot.get("target_pct", overlay_target_pct)
+                    and 0 < overlay_partial_exit_fraction < 1
+                    and overlay_age >= 1
+                    and price >= overlay_lot["buy_price"] * (
+                        1 + overlay_partial_target_pct
+                    ) * (1 + overlay_sell_execution_buffer_pct)
+                )
+                overlay_partial_hit = (
+                    overlay_partial_hit_signal
+                    and overlay_rng.random() <= overlay_sell_fill_probability
+                )
+                lot_hold_days = overlay_lot.get("hold_days", overlay_hold_days)
+                overlay_expired = lot_hold_days > 0 and overlay_age >= lot_hold_days
+                overlay_stopped = (
+                    overlay_stop_loss_pct > 0
+                    and overlay_age >= 2
+                    and close[t - 1] <= overlay_lot["buy_price"] * (
+                        1 - overlay_stop_loss_pct
+                    )
+                )
+                overlay_trailing_stopped = False
+                if (
+                    overlay_trailing_activation_pct > 0
+                    and overlay_trailing_drawdown_pct > 0
+                    and overlay_age >= 2
+                ):
+                    prior_close = close[t - 1]
+                    if prior_close >= overlay_lot["buy_price"] * (
+                        1 + overlay_trailing_activation_pct
+                    ):
+                        overlay_lot["trailing_active"] = True
+                    if overlay_lot.get("trailing_active", False):
+                        prior_peak = overlay_lot.get(
+                            "trailing_peak", overlay_lot["buy_price"]
+                        )
+                        overlay_lot["trailing_peak"] = max(prior_peak, prior_close)
+                        overlay_trailing_stopped = prior_close <= prior_peak * (
+                            1 - overlay_trailing_drawdown_pct
+                        )
+                if overlay_hit or overlay_expired or overlay_stopped or overlay_trailing_stopped:
+                    overlay_proceeds = overlay_lot["qty"] * price * (1 - overlay_fee)
+                    cash += overlay_proceeds
+                    shares -= overlay_lot["qty"]
+                    taxable_realized_by_year[dates[t].year] = (
+                        taxable_realized_by_year.get(dates[t].year, 0.0)
+                        + overlay_proceeds
+                        - overlay_lot["qty"] * overlay_lot["tax_basis_price"]
+                    )
+                    overlay_target_exits += int(overlay_hit)
+                    overlay_stop_exits += int(
+                        not overlay_hit and (overlay_stopped or overlay_trailing_stopped)
+                    )
+                    overlay_expired_exits += int(
+                        not overlay_hit and not overlay_stopped
+                        and not overlay_trailing_stopped and overlay_expired
+                    )
+                    exit_reason = (
+                        "target" if overlay_hit
+                        else "trailing_stop" if overlay_trailing_stopped
+                        else "stop" if overlay_stopped
+                        else "expiry"
+                    )
+                    overlay_events.append({
+                        "date": dates[t], "event": "sell",
+                        "reason": exit_reason,
+                        "qty": overlay_lot["qty"], "price": price,
+                        "buy_date": dates[overlay_lot["buy_day_idx"]],
+                        "buy_price": overlay_lot["buy_price"],
+                    })
+                elif overlay_partial_hit:
+                    partial_qty = float(np.floor(
+                        overlay_lot["qty"] * overlay_partial_exit_fraction
+                    ))
+                    if partial_qty >= 1 and partial_qty < overlay_lot["qty"]:
+                        overlay_proceeds = partial_qty * price * (1 - overlay_fee)
+                        cash += overlay_proceeds
+                        shares -= partial_qty
+                        taxable_realized_by_year[dates[t].year] = (
+                            taxable_realized_by_year.get(dates[t].year, 0.0)
+                            + overlay_proceeds
+                            - partial_qty * overlay_lot["tax_basis_price"]
+                        )
+                        overlay_lot["qty"] -= partial_qty
+                        overlay_lot["partial_done"] = True
+                        overlay_target_exits += 1
+                        overlay_events.append({
+                            "date": dates[t], "event": "sell",
+                            "reason": "partial_target",
+                            "qty": partial_qty, "price": price,
+                            "buy_date": dates[overlay_lot["buy_day_idx"]],
+                            "buy_price": overlay_lot["buy_price"],
+                        })
+                    overlay_remaining.append(overlay_lot)
+                else:
+                    overlay_remaining.append(overlay_lot)
+            overlay_lots = overlay_remaining
+
         # 오늘 '매도 주문을 걸 수 있는' 물량이 있었는지.
         # 있으면 매수 지정가를 (최저 목표가 - 0.01)로 걸게 되고, 그건 곧
         # '매도가 체결되면 매수는 미체결'이라 아래 did_sell 판정과 같아진다.
@@ -350,9 +835,24 @@ def run_jongsa(
         # 현실보다 유리하게 나오고, 앱이 알려준 수량과 실제 보유량도 어긋난다.
         #
         # src/jongsa_live.py의 order_plan()이 실제로 쓰는 가격과 같아야 한다.
+        def effective_lot_target(lot, held_days):
+            if (
+                base_late_target_after_days > 0
+                and held_days >= base_late_target_after_days
+                and base_late_target_return > 0
+            ):
+                target = lot.buy_price * (1 + base_late_target_return)
+                if fee_in_target:
+                    target *= 1 + 2 * fee_rate
+                return min(lot.target_price, target)
+            return lot.target_price
+
         pending_targets = [
-            lot.target_price for lot in open_lots
-            if 1 <= (t - lot.buy_day_idx) <= stop_days - 1
+            effective_lot_target(lot, t - lot.buy_day_idx) for lot in open_lots
+            if 1 <= (t - lot.buy_day_idx) and t < (
+                lot.expiry_day_idx if lot.expiry_day_idx is not None
+                else lot.buy_day_idx + stop_days
+            )
         ]
         if pending_targets:
             order_px = round(min(pending_targets) - 0.01, 2)   # 팔 물량이 있는 날
@@ -369,12 +869,18 @@ def run_jongsa(
         # 손실 리셋: 16일이 찬 물량이 **전부 전일 기준 손실**이면 전량 팔지 않고
         # 전일 총자산의 일정 비율만 남긴다. 남긴 것은 오늘 종가를 새 기준으로
         # 삼아 다시 센다. loss_reset_pct=0이면 이 블록은 통째로 건너뛴다.
-        forced_lots = [l for l in open_lots if (t - l.buy_day_idx) >= stop_days]
+        forced_lots = [
+            l for l in open_lots if t >= (
+                l.expiry_day_idx if l.expiry_day_idx is not None
+                else l.buy_day_idx + stop_days
+            )
+        ]
+        reset_lots = [l for l in forced_lots if not l.residual_exit]
         reset = None
-        if loss_reset_pct > 0 and forced_lots and t > 0:
+        if loss_reset_pct > 0 and reset_lots and t > 0:
             reset = plan_loss_reset(
                 [{"quantity": l.qty, "strategy_basis_price": l.strategy_basis_price}
-                 for l in forced_lots],
+                 for l in reset_lots],
                 prev_close=close[t - 1],
                 prev_total_assets=prev_total_assets,
                 retain_pct=loss_reset_pct,
@@ -392,10 +898,15 @@ def run_jongsa(
 
         for lot in open_lots:
             held = t - lot.buy_day_idx
+            lot_expiry = (
+                lot.expiry_day_idx if lot.expiry_day_idx is not None
+                else lot.buy_day_idx + stop_days
+            )
             sell_reason = None
-            if 1 <= held <= stop_days - 1 and price >= lot.target_price:
+            lot_sell_target = effective_lot_target(lot, held)
+            if 1 <= held and t < lot_expiry and price >= lot_sell_target:
                 sell_reason = "목표달성"
-            elif held >= stop_days:
+            elif t >= lot_expiry:
                 sell_reason = "강제손절"
 
             # 리셋하는 날의 강제청산 건은 일부(또는 전부)를 남긴다.
@@ -410,12 +921,92 @@ def run_jongsa(
                           strategy_basis_price=lot.strategy_basis_price,
                           origin=lot.origin)   # 남은 만큼만 판다
 
+            if (
+                sell_reason and t >= lot_expiry and not reset
+                and not lot.residual_exit
+                and 0 < base_expiry_sell_fraction < 1
+                and base_residual_hold_days > 0
+                and (
+                    base_residual_extension_values is None
+                    or (
+                        t > 0
+                        and np.isfinite(base_residual_extension_values[t - 1])
+                        and base_residual_extension_values[t - 1]
+                        >= base_residual_extension_threshold
+                    )
+                )
+                and (
+                    base_residual_min_cash_pct <= 0
+                    or cash / max(prev_total_assets, 1e-9)
+                    >= base_residual_min_cash_pct
+                )
+                and (
+                    base_residual_max_exposure_pct <= 0
+                    or (shares * (close[t - 1] if t > 0 else price))
+                    / max(prev_total_assets, 1e-9)
+                    <= base_residual_max_exposure_pct
+                )
+                and (
+                    base_residual_min_lot_return is None
+                    or (
+                        (close[t - 1] if t > 0 else price) / lot.buy_price - 1
+                        >= base_residual_min_lot_return
+                    )
+                )
+                and (
+                    base_residual_max_lot_return is None
+                    or (
+                        (close[t - 1] if t > 0 else price) / lot.buy_price - 1
+                        <= base_residual_max_lot_return
+                    )
+                )
+            ):
+                sell_qty = (
+                    math.floor(lot.qty * base_expiry_sell_fraction)
+                    if whole_shares else lot.qty * base_expiry_sell_fraction
+                )
+                sell_qty = max(1.0 if whole_shares else 1e-9, sell_qty)
+                sell_qty = min(lot.qty, sell_qty)
+                keep_qty = lot.qty - sell_qty
+                if keep_qty > 1e-9:
+                    residual_target = (
+                        base_residual_target_return
+                        if base_residual_target_return > 0 else target_return
+                    )
+                    residual_tgt = lot.buy_price * (1 + residual_target)
+                    if fee_in_target:
+                        residual_tgt *= 1 + 2 * fee_rate
+                    remaining.append(Lot(
+                        buy_day_idx=lot.buy_day_idx,
+                        buy_price=lot.buy_price,
+                        qty=keep_qty,
+                        target_price=residual_tgt,
+                        strategy_basis_price=lot.strategy_basis_price,
+                        origin="expiry_residual",
+                        expiry_day_idx=t + base_residual_hold_days,
+                        residual_exit=True,
+                    ))
+                    lot = Lot(
+                        buy_day_idx=lot.buy_day_idx,
+                        buy_price=lot.buy_price,
+                        qty=sell_qty,
+                        target_price=lot.target_price,
+                        strategy_basis_price=lot.strategy_basis_price,
+                        origin=lot.origin,
+                        expiry_day_idx=lot.expiry_day_idx,
+                        residual_exit=lot.residual_exit,
+                    )
+
             if sell_reason:
                 proceeds = lot.qty * price * (1 - fee_rate)
                 cost = lot.qty * lot.buy_price
                 cash += proceeds
                 shares -= lot.qty
                 pnl = proceeds - cost
+                taxable_realized_by_year[dates[t].year] = (
+                    taxable_realized_by_year.get(dates[t].year, 0.0)
+                    + proceeds - lot.qty * lot.buy_price * (1 + fee_rate)
+                )
                 realized_pnl[t] += pnl
                 trades.append(
                     {
@@ -450,7 +1041,7 @@ def run_jongsa(
             kept_qty = sum(q for q, _ in retain_parts)
             kept_cost = sum(q * p for q, p in retain_parts)
             avg_cost = kept_cost / kept_qty if kept_qty > 0 else price
-            tgt = price * (1 + target_return)
+            tgt = price * (1 + effective_target_return)
             if fee_in_target:
                 tgt *= 1 + 2 * fee_rate
             open_lots.append(
@@ -487,11 +1078,18 @@ def run_jongsa(
         else:
             buy_today = False
 
+        if buy_today and base_buy_max_prior_rsi > 0 and t > 0:
+            if (
+                not np.isfinite(overlay_rsi[t - 1])
+                or overlay_rsi[t - 1] > base_buy_max_prior_rsi
+            ):
+                buy_today = False
+
         # LOC 지정가 매수: 주문가 = 전일종가 x (1+목표수익률).
         # 오늘 종가가 그보다 높으면(= 어제보다 많이 올랐으면) 체결되지 않는다.
         # 구글시트 사례에서 확인된 규칙으로, 원 스펙 문서에는 없었다.
         if buy_today and loc_buy_limit and t > 0:
-            order_limit = close[t - 1] * (1 + target_return)
+            order_limit = close[t - 1] * (1 + effective_target_return)
             if price > order_limit:
                 buy_today = False
 
@@ -520,11 +1118,11 @@ def run_jongsa(
                     desired = season_seed
                 elif reinvest:
                     # 번 돈까지 굴린다 — 자산이 늘면 하루 매수금도 같이 늘어난다
-                    desired = prev_total_assets * daily_buy_pct
+                    desired = prev_total_assets * effective_daily_buy_pct
                 else:
                     # 재투자 안 함 — 하루 매수금을 '넣은 돈' 기준으로 고정.
                     # 중간에 입금하면 그만큼은 늘어나야 한다. 벌어들인 이익만 제외한다.
-                    desired = contributed * daily_buy_pct
+                    desired = contributed * effective_daily_buy_pct
             else:  # V4
                 if t > 0:
                     should_update = True
@@ -570,22 +1168,33 @@ def run_jongsa(
                         if price > rung_px:
                             break
                         qty += rung_qty
+                fill_price = price
+                actual_fill = actual_fills.get(pd.Timestamp(dates[t]).normalize())
+                if actual_fill is not None:
+                    qty, fill_price = actual_fill
+                    if qty <= 0 or fill_price <= 0:
+                        qty = 0.0
                 if qty > 0:
-                    spend = qty * price * (1 + fee_rate)
+                    spend = qty * fill_price * (1 + fee_rate)
                     if spend > cash:  # 반올림으로 예수금을 넘지 않게
-                        qty = cash / (price * (1 + fee_rate))
+                        if actual_fill is not None:
+                            raise ValueError(
+                                f"{pd.Timestamp(dates[t]).date()} 실제 매수금액이 예수금을 초과합니다. "
+                                "체결 수량·가격 또는 입금 기록을 확인해주세요."
+                            )
+                        qty = cash / (fill_price * (1 + fee_rate))
                         if whole_shares:
                             qty = float(int(qty))
-                        spend = qty * price * (1 + fee_rate)
+                        spend = qty * fill_price * (1 + fee_rate)
                     if qty > 0:
                         cash -= spend
                         shares += qty
                         # 시트는 목표가에 왕복 수수료를 얹어둔다
-                        tgt = price * (1 + target_return)
+                        tgt = fill_price * (1 + effective_target_return)
                         if fee_in_target:
                             tgt *= 1 + 2 * fee_rate
                         open_lots.append(
-                            Lot(buy_day_idx=t, buy_price=price, qty=qty, target_price=tgt)
+                            Lot(buy_day_idx=t, buy_price=fill_price, qty=qty, target_price=tgt)
                         )
                         buy_qty_today = qty
                         buy_amt_today = spend
@@ -596,6 +1205,252 @@ def run_jongsa(
             buy_amt_today = 0.0
             buy_target_today = None
 
+        # Base orders have priority. The overlay LOC quantity is sized from
+        # yesterday's known limit, then filled at today's closing price.
+        if overlay_dip_pct > 0 and t > 0:
+            overlay_bear_regime = bool(
+                overlay_regime_switch
+                and (
+                    (
+                        overlay_regime_values is not None
+                        and np.isfinite(overlay_regime_values[t - 1])
+                        and overlay_regime_values[t - 1] < 0.5
+                    )
+                    or (
+                        overlay_regime_values is None
+                        and overlay_ma is not None
+                        and np.isfinite(overlay_ma[t - 1])
+                        and overlay_trend_values[t - 1] < overlay_ma[t - 1]
+                    )
+                )
+            )
+            effective_dip_pct = overlay_dip_pct
+            if (
+                overlay_volatility is not None
+                and overlay_volatility_multiple > 0
+                and np.isfinite(overlay_volatility[t - 1])
+            ):
+                effective_dip_pct = max(
+                    overlay_min_dip_pct,
+                    overlay_volatility[t - 1] * overlay_volatility_multiple,
+                )
+            if overlay_bear_regime and overlay_bear_dip_pct > 0:
+                effective_dip_pct = overlay_bear_dip_pct
+            overlay_limit = close[t - 1] * (1 - effective_dip_pct)
+            if (
+                overlay_cumulative_lookback_days > 0
+                and overlay_cumulative_dip_pct > 0
+            ):
+                if t >= overlay_cumulative_lookback_days:
+                    reference_t = t - overlay_cumulative_lookback_days
+                    overlay_limit = close[reference_t] * (
+                        1 - overlay_cumulative_dip_pct
+                    )
+                else:
+                    overlay_limit = float("-inf")
+            if overlay_prior_day_signal_dip_pct > 0:
+                prior_day_return = (
+                    close[t - 1] / close[t - 2] - 1 if t >= 2 else 0.0
+                )
+                if prior_day_return <= -overlay_prior_day_signal_dip_pct:
+                    overlay_limit = close[t - 1] * (
+                        1 - overlay_next_day_discount_pct
+                    )
+                else:
+                    overlay_limit = float("-inf")
+            overlay_filter_ok = True
+            if overlay_ma is not None:
+                overlay_filter_ok = np.isfinite(overlay_ma[t - 1])
+                if not overlay_regime_switch:
+                    overlay_filter_ok = (
+                        overlay_filter_ok
+                        and overlay_trend_values[t - 1] >= overlay_ma[t - 1]
+                    )
+                if overlay_filter_ok and overlay_trend_ma_slope_days > 0:
+                    slope_ref = t - 1 - overlay_trend_ma_slope_days
+                    overlay_filter_ok = (
+                        slope_ref >= 0
+                        and np.isfinite(overlay_ma[slope_ref])
+                        and overlay_ma[t - 1] >= overlay_ma[slope_ref]
+                    )
+            if overlay_filter_ok and overlay_max_prior_drawdown_pct > 0:
+                prior_dd = close[t - 1] / overlay_prior_peak[t - 1] - 1
+                overlay_filter_ok = prior_dd >= -overlay_max_prior_drawdown_pct
+            if (
+                overlay_filter_ok
+                and overlay_recovery_lookback_days > 1
+                and overlay_recovery_crash_pct > 0
+                and overlay_recovery_rebound_pct > 0
+            ):
+                window_start = t - overlay_recovery_lookback_days
+                if window_start < 0:
+                    overlay_filter_ok = False
+                else:
+                    # Everything in this window ends at t-1, so the filter is
+                    # known before today's close/LOC execution.  The trough
+                    # must occur after the peak to represent crash -> recovery.
+                    recovery_window = close[window_start:t]
+                    peak_offset = int(np.argmax(recovery_window))
+                    after_peak = recovery_window[peak_offset:]
+                    trough_offset = int(np.argmin(after_peak))
+                    recovery_peak = float(recovery_window[peak_offset])
+                    recovery_trough = float(after_peak[trough_offset])
+                    crash_return = recovery_trough / recovery_peak - 1
+                    rebound_return = close[t - 1] / recovery_trough - 1
+                    overlay_filter_ok = (
+                        crash_return <= -overlay_recovery_crash_pct
+                        and rebound_return >= overlay_recovery_rebound_pct
+                    )
+            effective_overlay_rsi = (
+                overlay_bear_rsi
+                if overlay_bear_regime and overlay_bear_rsi is not None
+                else overlay_rsi
+            )
+            if overlay_filter_ok and overlay_min_prior_rsi > 0:
+                overlay_filter_ok = (
+                    np.isfinite(effective_overlay_rsi[t - 1])
+                    and effective_overlay_rsi[t - 1] >= overlay_min_prior_rsi
+                )
+            effective_max_prior_rsi = (
+                overlay_bear_max_prior_rsi
+                if overlay_bear_regime and overlay_bear_max_prior_rsi > 0
+                else overlay_max_prior_rsi
+            )
+            if overlay_filter_ok and effective_max_prior_rsi > 0:
+                overlay_filter_ok = (
+                    np.isfinite(effective_overlay_rsi[t - 1])
+                    and effective_overlay_rsi[t - 1] <= effective_max_prior_rsi
+                )
+            if overlay_filter_ok and overlay_filter_signal_min > 0:
+                overlay_filter_ok = (
+                    overlay_filter_values is not None
+                    and np.isfinite(overlay_filter_values[t - 1])
+                    and overlay_filter_values[t - 1] >= overlay_filter_signal_min
+                )
+            if overlay_filter_ok and overlay_filter_signal_max > 0:
+                overlay_filter_ok = (
+                    overlay_filter_values is not None
+                    and np.isfinite(overlay_filter_values[t - 1])
+                    and overlay_filter_values[t - 1] <= overlay_filter_signal_max
+                )
+            if overlay_filter_ok and overlay_entry_cooldown_days > 0:
+                overlay_filter_ok = (
+                    t - overlay_last_entry_idx > overlay_entry_cooldown_days
+                )
+            if overlay_filter_ok and overlay_open_gap_min is not None:
+                overlay_filter_ok = (
+                    open_prices is not None
+                    and open_prices[t] / close[t - 1] - 1 >= overlay_open_gap_min
+                )
+            if overlay_filter_ok and overlay_open_gap_max is not None:
+                overlay_filter_ok = (
+                    open_prices is not None
+                    and open_prices[t] / close[t - 1] - 1 <= overlay_open_gap_max
+                )
+            if (
+                price <= overlay_limit * (1 - overlay_buy_execution_buffer_pct)
+                and overlay_filter_ok
+                and overlay_rng.random() <= overlay_buy_fill_probability
+            ):
+                overlay_value = overlay_known_value
+                effective_overlay_cap_pct = (
+                    overlay_bear_cap_pct
+                    if overlay_bear_regime and overlay_bear_cap_pct > 0
+                    else overlay_cap_pct
+                )
+                overlay_room = max(
+                    0.0, prev_total_assets * effective_overlay_cap_pct - overlay_value
+                )
+                overlay_known_available = max(
+                    0.0,
+                    overlay_known_cash
+                    - prev_total_assets * effective_daily_buy_pct,
+                )
+                effective_overlay_entry_pct = overlay_entry_pct
+                if overlay_bear_regime and overlay_bear_entry_pct > 0:
+                    effective_overlay_entry_pct = overlay_bear_entry_pct
+                if (
+                    overlay_deep_rsi_threshold > 0
+                    and overlay_deep_entry_pct > 0
+                    and np.isfinite(effective_overlay_rsi[t - 1])
+                    and effective_overlay_rsi[t - 1] <= overlay_deep_rsi_threshold
+                ):
+                    effective_overlay_entry_pct = overlay_deep_entry_pct
+                if (
+                    overlay_entry_size_values is not None
+                    and np.isfinite(overlay_entry_size_values[t - 1])
+                ):
+                    if (
+                        overlay_entry_size_values[t - 1]
+                        >= overlay_entry_size_threshold
+                        and overlay_entry_size_above_pct > 0
+                    ):
+                        effective_overlay_entry_pct = overlay_entry_size_above_pct
+                    elif (
+                        overlay_entry_size_values[t - 1]
+                        < overlay_entry_size_threshold
+                        and overlay_entry_size_below_pct > 0
+                    ):
+                        effective_overlay_entry_pct = overlay_entry_size_below_pct
+                overlay_budget = min(
+                    prev_total_assets * effective_overlay_entry_pct,
+                    overlay_known_available,
+                    cash,
+                    overlay_room,
+                )
+                overlay_size_cost = overlay_limit * (1 + overlay_fee)
+                overlay_qty = (
+                    math.floor(overlay_budget / overlay_size_cost)
+                    if overlay_size_cost > 0 else 0
+                )
+                if overlay_qty > 0:
+                    overlay_spend = overlay_qty * price * (1 + overlay_fee)
+                    if overlay_spend <= cash + 1e-9:
+                        cash -= overlay_spend
+                        shares += overlay_qty
+                        overlay_lots.append({
+                            "buy_day_idx": t,
+                            "buy_price": price,
+                            "tax_basis_price": price * (1 + overlay_fee),
+                            "qty": float(overlay_qty),
+                            "target_pct": (
+                                overlay_bear_target_pct
+                                if overlay_bear_regime and overlay_bear_target_pct > 0
+                                else overlay_target_pct
+                            ),
+                            "hold_days": (
+                                overlay_bear_hold_days
+                                if overlay_bear_regime and overlay_bear_hold_days > 0
+                                else overlay_hold_days
+                            ),
+                            "late_target_pct": overlay_late_target_pct,
+                            "late_target_after_days": overlay_late_target_after_days,
+                            "partial_done": False,
+                            "trailing_active": False,
+                            "trailing_peak": float(price),
+                        })
+                        overlay_events.append({
+                            "date": dates[t], "event": "buy",
+                            "reason": "bear" if overlay_bear_regime else "bull",
+                            "qty": float(overlay_qty), "price": price,
+                            "limit": overlay_limit,
+                        })
+                        overlay_last_entry_idx = t
+                        overlay_entries += 1
+
+        # Conservative annual tax accrual: deduct on the last trading day of
+        # each calendar year instead of waiting until the following May.
+        is_year_end = t == n - 1 or dates[t + 1].year != dates[t].year
+        if annual_realized_tax_rate > 0 and is_year_end:
+            taxable = max(
+                0.0,
+                taxable_realized_by_year.get(dates[t].year, 0.0)
+                - annual_tax_exemption,
+            )
+            tax_due = taxable * annual_realized_tax_rate
+            cash -= tax_due
+            total_realized_tax += tax_due
+
         # ---------- 3) 기록 ----------
         # 하루 매수금은 '굴리는 돈'만 기준으로 삼는다. 배당까지 넣으면
         # 그게 곧 배당 재투자가 된다.
@@ -603,6 +1458,9 @@ def run_jongsa(
         total = trading_assets + dividend_cash
         equity[t] = total
         exposure[t] = (shares * price / total) if total > 0 else 0.0
+        current_overlay_value = sum(lot["qty"] * price for lot in overlay_lots)
+        overlay_exposure[t] = current_overlay_value / total if total > 0 else 0.0
+        overlay_lot_counts[t] = len(overlay_lots)
         open_lot_counts[t] = len(open_lots)
         contributed_arr[t] = contributed
         dividend_arr[t] = dividend_cash
@@ -708,6 +1566,15 @@ def run_jongsa(
         buy_range_skips=range_skips,
         loss_reset_days=reset_days,
         loss_reset_kept_qty=reset_kept_qty,
+        overlay_entries=overlay_entries,
+        overlay_target_exits=overlay_target_exits,
+        overlay_expired_exits=overlay_expired_exits,
+        overlay_stop_exits=overlay_stop_exits,
+        overlay_events=overlay_events,
+        max_overlay_exposure_pct=float(overlay_exposure.max()) * 100,
+        avg_overlay_exposure_pct=float(overlay_exposure.mean()) * 100,
+        max_overlay_lots=int(overlay_lot_counts.max()),
+        total_realized_tax=total_realized_tax,
         final_value=float(equity_s.iloc[-1]),
         twr_curve=twr_s,
         contributed_curve=contributed_s,
