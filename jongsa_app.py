@@ -1335,6 +1335,8 @@ if ready:
             "종가": st.column_config.NumberColumn(format="$%.2f"),
             "입출금": st.column_config.NumberColumn(format="$%+.0f", help="양수는 입금, 음수는 출금"),
             "매수금액": st.column_config.NumberColumn(format="$%.2f"),
+            "주문기준가": st.column_config.NumberColumn(format="$%.2f"),
+            "매수체결가": st.column_config.NumberColumn(format="$%.2f"),
             "목표가": st.column_config.NumberColumn(format="$%.2f"),
             "매도금액": st.column_config.NumberColumn(format="$%.2f"),
             "실현손익": st.column_config.NumberColumn(format="$%.2f"),

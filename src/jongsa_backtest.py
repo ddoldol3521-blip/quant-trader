@@ -1146,6 +1146,8 @@ def run_jongsa(
             buy_qty_today = 0.0
             buy_amt_today = 0.0
             buy_target_today = None
+            buy_fill_price_today = None
+            actual_fill_used_today = False
             if buy_amount > 0 and cash > 0:
                 if buy_amount >= cash - 1e-9:
                     cash_exhausted += 1
@@ -1172,6 +1174,7 @@ def run_jongsa(
                 actual_fill = actual_fills.get(pd.Timestamp(dates[t]).normalize())
                 if actual_fill is not None:
                     qty, fill_price = actual_fill
+                    actual_fill_used_today = True
                     if qty <= 0 or fill_price <= 0:
                         qty = 0.0
                 if qty > 0:
@@ -1199,11 +1202,14 @@ def run_jongsa(
                         buy_qty_today = qty
                         buy_amt_today = spend
                         buy_target_today = tgt
+                        buy_fill_price_today = fill_price
         else:
             buy_budget_today = 0.0
             buy_qty_today = 0.0
             buy_amt_today = 0.0
             buy_target_today = None
+            buy_fill_price_today = None
+            actual_fill_used_today = False
 
         # Base orders have priority. The overlay LOC quantity is sized from
         # yesterday's known limit, then filled at today's closing price.
@@ -1475,7 +1481,16 @@ def run_jongsa(
                 "매수수량": round(buy_qty_today) if buy_qty_today else None,
                 # 그날 걸었던 LOC 매수 지정가와 쓸 수 있었던 하루 매수금.
                 # 둘이 있어야 '예산을 다 못 썼는지'를 나중에 따져볼 수 있다.
-                "매수지정가": round(order_px, 2) if buy_qty_today else None,
+                # 수동 체결 정정일에는 원래 전략의 주문 기준가를 비워
+                # 실제 체결가와 전략 계산값이 섞여 보이지 않게 한다.
+                "주문기준가": (
+                    round(order_px, 2)
+                    if buy_qty_today and not actual_fill_used_today else None
+                ),
+                "매수체결가": (
+                    round(buy_fill_price_today, 2)
+                    if buy_fill_price_today is not None else None
+                ),
                 "매수예산": round(buy_budget_today, 2) if buy_qty_today else None,
                 "목표가": round(buy_target_today, 2) if buy_target_today else None,
                 "매도수량": round(sell_qty_today) if sell_qty_today else None,
