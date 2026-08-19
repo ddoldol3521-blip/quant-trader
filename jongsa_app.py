@@ -1086,6 +1086,37 @@ if ready:
                     "사유": f"{s['보유영업일']}일차 · 종가가 지정가 이상이면 체결",
                 })
             st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+            # 매수 주문처럼 표를 해석하지 않아도 바로 옮겨 적을 수 있는 주문 카드.
+            # 특히 모바일에서는 표의 지정가 열이 접혀 매도 주문이 없는 것처럼
+            # 보일 수 있으므로 실제 입력 문장을 표 위/아래와 별개로 크게 보여준다.
+            sell_lines = []
+            for s in forced:
+                alt = s.get("대체지정가")
+                if alt:
+                    sell_lines.append(
+                        f"**{s['qty']:,.0f}주 매도 — LOC 지정가 \\${alt:.2f}** "
+                        "(기간 종료·사실상 무조건 매도)"
+                    )
+                else:
+                    sell_lines.append(
+                        f"**{s['qty']:,.0f}주 매도 — MOC** (기간 종료·종가 전량 매도)"
+                    )
+            for s in pending:
+                sell_lines.append(
+                    f"**{s['qty']:,.0f}주 매도 — LOC 지정가 \\${s['target_price']:.2f}**"
+                )
+            if sell_lines:
+                st.error("### 오늘 입력할 매도 주문\n\n" + "\n\n".join(sell_lines))
+
+            with st.expander("매도 주문은 어떻게 넣나요? · 처음이면 보기", expanded=False):
+                st.markdown(
+                    "1. 증권사 해외주식 주문에서 **매도**를 선택합니다.  \n"
+                    "2. 화면에 적힌 **수량**과 **LOC 지정가**를 그대로 입력합니다.  \n"
+                    "3. LOC 매도는 종가가 지정가 이상일 때만 체결됩니다. 지정가에 파는 것이 아니라 "
+                    "그날 **종가 부근에서 체결**됩니다.  \n"
+                    "4. 체결되지 않으면 주식은 그대로 남고, 다음 거래일에 앱이 다시 매도가를 보여줍니다.  \n"
+                    "5. MOC가 표시되면 가격 조건 없이 그날 종가로 전량 매도하는 주문입니다."
+                )
             reset = plan.get("손실리셋")
             if reset:
                 # 리셋이 걸린 날은 위 표의 '전량 매도'가 아니라 순매도 하나만 낸다.
@@ -1252,6 +1283,35 @@ if not ready:
 
 if ready:
   with tab_grid:
+    st.markdown("## 실제 체결 정정 기록")
+    if st.session_state.actual_fills:
+        actual_rows = []
+        for fill in sorted(st.session_state.actual_fills, key=lambda x: x["날짜"], reverse=True):
+            actual_rows.append({
+                "미국 거래일": str(fill["날짜"]),
+                "실제 수량": round(fill["수량"]),
+                "실제 체결가": fill["체결가"],
+                "목표 LOC 매도가": target_price_for(fill["체결가"], cfg),
+                "구분": "LOC 거부·수동 대체 또는 실제가 정정",
+            })
+        st.dataframe(
+            pd.DataFrame(actual_rows), width="stretch", hide_index=True,
+            height=min(260, 45 + 35 * len(actual_rows)),
+            column_config={
+                "실제 체결가": st.column_config.NumberColumn(format="$%.2f"),
+                "목표 LOC 매도가": st.column_config.NumberColumn(format="$%.2f"),
+            },
+        )
+        st.caption(
+            "이 기록은 앱의 종가 가정보다 우선합니다. 보유원가·현금·오늘 매도 주문도 이 값으로 계산됩니다."
+        )
+    else:
+        st.info(
+            "직접 수정한 실제 체결 기록은 없습니다. LOC 거부 후 수동으로 샀다면 "
+            "📅 퀀트믹스 주문 탭의 ‘실제 매수 체결가 반영’에 입력하세요."
+        )
+
+    st.markdown("## 전략 일별 기록")
     g1, g2, g3 = st.columns([1, 1, 3])
     with g1:
         only_act = st.checkbox("매매한 날만", value=False)
@@ -1288,8 +1348,8 @@ if ready:
         },
     )
     st.caption(
-        "⚠️ 체결가를 모두 종가로 가정했습니다. 배당은 받은 날짜에 따로 쌓이고 "
-        "매매에는 쓰지 않습니다 (재투자 안 함). 실제 거래하셨다면 증권사 기록이 우선입니다."
+        "⚠️ 별도로 입력한 실제 체결 기록은 실제 가격·수량을 사용하고, 나머지 거래만 종가 체결로 가정합니다. "
+        "배당은 받은 날짜에 따로 쌓이며 매매에는 쓰지 않습니다."
     )
 
 # ============================================================ 백테스트
