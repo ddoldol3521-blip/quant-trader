@@ -227,6 +227,7 @@ def flows_to_param(flows: list) -> str:
 
 
 ACTUAL_FILLS_PATH = Path(__file__).resolve().parent / "jongsa_actual_fills.json"
+ORDER_GUIDES_PATH = Path(__file__).resolve().parent / "jongsa_order_guides.json"
 
 
 def actual_fills_from_url() -> list:
@@ -269,6 +270,48 @@ def save_actual_fills(fills: list) -> None:
 
 def actual_fills_to_param(fills: list) -> str:
     return ",".join(f"{x['날짜']}:{x['수량']:g}:{x['체결가']:g}" for x in fills)
+
+
+def order_guides_from_url() -> list:
+    """화면에 실제로 표시했던 매수 가이드. 형식: og=2026-08-19:40,..."""
+    out = []
+    for part in st.query_params.get("og", "").split(","):
+        bits = part.split(":")
+        if len(bits) != 2:
+            continue
+        try:
+            d, qty = pd.Timestamp(bits[0]).date(), float(bits[1])
+            if qty >= 0:
+                out.append({"날짜": d, "수량": qty})
+        except (TypeError, ValueError):
+            continue
+    return sorted(out, key=lambda x: x["날짜"])
+
+
+def load_saved_order_guides() -> list:
+    if is_shared_server() or not ORDER_GUIDES_PATH.exists():
+        return []
+    try:
+        raw = json.loads(ORDER_GUIDES_PATH.read_text(encoding="utf-8"))
+        return sorted([
+            {"날짜": pd.Timestamp(x["날짜"]).date(), "수량": float(x["수량"])}
+            for x in raw
+        ], key=lambda x: x["날짜"])
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return []
+
+
+def save_order_guides(guides: list) -> None:
+    if is_shared_server():
+        return
+    data = [{"날짜": str(x["날짜"]), "수량": x["수량"]} for x in guides]
+    ORDER_GUIDES_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def order_guides_to_param(guides: list) -> str:
+    return ",".join(f"{x['날짜']}:{x['수량']:g}" for x in guides)
 
 
 def cfg_from_url(base: dict) -> dict:
@@ -320,6 +363,9 @@ def cfg_to_url(cfg: dict, flows: list) -> None:
     actual_fills = st.session_state.get("actual_fills", [])
     if actual_fills:
         params["af"] = actual_fills_to_param(actual_fills)
+    order_guides = st.session_state.get("order_guides", [])
+    if order_guides:
+        params["og"] = order_guides_to_param(order_guides)
     # 트렌드 펄스는 별도 탭·별도 설정이다. 퀀트믹스 설정을 저장해도
     # 트렌드 펄스 URL 값이 사라지지 않게 보존한다.
     for key, value in st.query_params.to_dict().items():
@@ -554,6 +600,11 @@ if "actual_fills" not in st.session_state:
     st.session_state.actual_fills = (
         _url_actual_fills if _url_actual_fills else load_saved_actual_fills()
     )
+if "order_guides" not in st.session_state:
+    _url_order_guides = order_guides_from_url()
+    st.session_state.order_guides = (
+        _url_order_guides if _url_order_guides else load_saved_order_guides()
+    )
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -592,7 +643,8 @@ def load_dividends(ticker: str, start: str, end: str) -> pd.Series:
 @st.cache_data(ttl=1800, show_spinner=False)
 def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole, mode,
              reinvest, flows, buy_range=None, ladder_rungs=0, ladder_step=0.03,
-             loss_reset=0.0, loss_reset_threshold=0.0, actual_buy_fills=()):
+             loss_reset=0.0, loss_reset_threshold=0.0, actual_buy_fills=(),
+             guided_buy_qty=()):
     """시작일부터 오늘까지 규칙대로 돌린다. 설정이 같으면 캐시에서 바로 나온다.
 
     today를 인자로 받는 이유: 캐시 키에 날짜가 들어가야 날이 바뀌는 순간
@@ -613,6 +665,7 @@ def simulate(ticker, start, today, cash, pct, tgt, stop, fee, fee_in_tgt, whole,
         loss_reset_pct=loss_reset,
         loss_reset_threshold_pct=loss_reset_threshold,
         actual_buy_fills=actual_buy_fills,
+        guided_buy_qty=guided_buy_qty,
     )
     bh = run_buy_and_hold(
         hist, initial_cash=cash, fee_rate=fee, whole_shares=whole,
@@ -869,6 +922,10 @@ with tab_home:
         (str(x["날짜"]), float(x["수량"]), float(x["체결가"]))
         for x in st.session_state.actual_fills
     )
+    guided_buy_tuples = tuple(
+        (str(x["날짜"]), float(x["수량"]))
+        for x in st.session_state.order_guides
+    )
     recent = None   # 계산이 안 될 때만 쓰는 최근 시세
     try:
         with st.spinner("계산 중..."):
@@ -882,6 +939,7 @@ with tab_home:
                 float(cfg.get("loss_reset_pct", 0.0)),
                 float(cfg.get("loss_reset_threshold_pct", 0.0)),
                 actual_fill_tuples,
+                guided_buy_tuples,
             )
     except Exception as e:
         ready = False   # 아래 탭들이 쓸 계산 결과가 없다는 뜻
@@ -1055,11 +1113,34 @@ if ready:
     # 하루 매수금 기준액에서 배당은 뺀다. 넣으면 그게 배당 재투자가 되고,
     # 엔진(prev_total_assets)과도 어긋나 안내 수량이 실제와 달라진다.
     trading_assets = total - res.total_dividends
+    # 한국 날짜가 아니라, 마지막 확정 종가 다음의 실제 미국 거래일에 주문표를
+    # 귀속한다. 자정 이후에 열어도 날짜가 하루 밀리지 않는다.
+    order_trade_date = pd.Timestamp(price_date).date() + timedelta(days=1)
+    while not is_us_market_open(order_trade_date.isoformat()):
+        order_trade_date += timedelta(days=1)
+
     plan = order_plan(
         res.final_lots, cash, (trading_assets if reinvest else put_in), plan_cfg,
-        date.today().isoformat(), trading_dates=hist.index,
+        order_trade_date.isoformat(), trading_dates=hist.index,
     )
     forced, pending, buy = plan["강제매도"], plan["목표매도"], plan["매수"]
+
+    # 화면에 한 번 보여준 기본 매수수량은 그 날짜의 장부로 고정한다.
+    # 다음 날 시작일부터 다시 계산해도 40주 안내가 41주 기록으로 바뀌지 않는다.
+    guide_map = {x["날짜"]: float(x["수량"]) for x in st.session_state.order_guides}
+    if order_trade_date in guide_map:
+        buy["qty"] = guide_map[order_trade_date]
+        px = buy.get("기준가") or buy.get("limit") or price
+        buy["cost"] = buy["qty"] * px * (1 + cfg.get("fee_rate", 0.0))
+    else:
+        st.session_state.order_guides = sorted(
+            [*st.session_state.order_guides,
+             {"날짜": order_trade_date, "수량": float(buy.get("qty", 0.0) or 0.0)}],
+            key=lambda x: x["날짜"],
+        )
+        save_order_guides(st.session_state.order_guides)
+        cfg_to_url(cfg, st.session_state.flows)
+        st.rerun()
 
     a1, a2 = st.columns(2)
     with a1:

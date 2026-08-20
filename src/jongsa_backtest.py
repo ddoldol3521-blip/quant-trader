@@ -255,6 +255,7 @@ def run_jongsa(
     order_sized_qty: bool = True,
     dividends=None,
     actual_buy_fills=None,
+    guided_buy_qty=None,
     ladder_rungs: int = 0,
     ladder_step: float = 0.03,
     loss_reset_pct: float = 0.0,
@@ -538,6 +539,16 @@ def run_jongsa(
         try:
             d, qty, fill_price = raw
             actual_fills[pd.Timestamp(d).normalize()] = (float(qty), float(fill_price))
+        except (TypeError, ValueError):
+            continue
+    # 실전 앱이 그날 사용자에게 보여준 주문 수량. 과거를 다시 계산하더라도
+    # 이미 안내한 수량이 바뀌지 않게 고정한다. 실제 체결 입력이 있으면 아래에서
+    # 그것이 이 값보다 우선한다.
+    guided_qty = {}
+    for raw in guided_buy_qty or []:
+        try:
+            d, qty = raw
+            guided_qty[pd.Timestamp(d).normalize()] = max(0.0, float(qty))
         except (TypeError, ValueError):
             continue
     dividend_cash = 0.0        # 받은 배당. 따로 둔다 — 매매에 쓰지 않는다
@@ -1160,6 +1171,12 @@ def run_jongsa(
                     qty = 0.0
                 if whole_shares:
                     qty = float(int(qty))
+                saved_guide_qty = guided_qty.get(pd.Timestamp(dates[t]).normalize())
+                if saved_guide_qty is not None:
+                    qty = saved_guide_qty
+                    if whole_shares:
+                        qty = float(int(qty))
+                if whole_shares:
                     # 사다리 주문: 기본 주문 아래에 걸어둔 칸들 중 종가가 지정가
                     # 이하인 것까지 체결된다. 지정가가 내림차순이라 위에서부터
                     # 하나라도 안 되면 그 아래도 안 된다.
