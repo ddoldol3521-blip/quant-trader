@@ -14,17 +14,52 @@
 
 import os
 import html
-from datetime import date
+import json
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from src.data.kr_data import get_dividends, get_kr_ohlcv
 from src.jongsa_backtest import run_jongsa
-from src.jongsa_live import load_config, make_held_counter, order_plan
+from src.jongsa_live import is_us_market_open, load_config, make_held_counter, order_plan
 from src.scheduler import load_jongsa_notify_config
 from src.telegram_notify import load_telegram_config, send_telegram_message
 
 WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FLOWS_PATH = PROJECT_ROOT / "jongsa_flows.json"
+ACTUAL_FILLS_PATH = PROJECT_ROOT / "jongsa_actual_fills.json"
+ORDER_GUIDES_PATH = PROJECT_ROOT / "jongsa_order_guides.json"
+
+
+def _load_local_rows(path: Path) -> list:
+    """앱 화면이 저장한 실전 보정 기록을 알림에서도 똑같이 읽는다."""
+    if not path.exists():
+        return []
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        return rows if isinstance(rows, list) else []
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def _completed_history(hist: pd.DataFrame) -> pd.DataFrame:
+    """미국 장중의 미완성 오늘 봉을 제거한다. 앱 화면과 같은 기준이다."""
+    if hist is None or hist.empty:
+        return hist
+    out = hist.copy()
+    idx = pd.to_datetime(out.index)
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_localize(None)
+    out.index = idx
+    ny_now = datetime.now(ZoneInfo("America/New_York"))
+    if ny_now.time() < time(16, 0):
+        out = out[out.index.date < ny_now.date()]
+    else:
+        out = out[out.index.date <= ny_now.date()]
+    return out
 
 # 환경변수 이름 → 설정 항목. 표로 두면 문서와 코드가 따로 놀지 않는다.
 ENV_KEYS = {
@@ -109,7 +144,9 @@ def copyable_order_lines(plan: dict) -> list[str]:
     return lines
 
 
-def build_message(today: date = None, config: dict = None, cash_flows: list = None) -> str:
+def build_message(today: date = None, config: dict = None, cash_flows: list = None,
+                  actual_buy_fills: list = None, guided_buy_qty: list = None,
+                  expected_close: date = None, metadata: dict = None) -> str:
     """오늘 보낼 메시지 전체를 만든다."""
     s = settings(config)
     ticker, stop, rng = s["ticker"], s["stop"], s["rng"]
@@ -117,7 +154,20 @@ def build_message(today: date = None, config: dict = None, cash_flows: list = No
         raise ValueError("시작일이 비어 있습니다. 앱에서 시작일을 정하고 저장하세요.")
 
     today = today or date.today()
-    hist = get_kr_ohlcv(ticker, s["start"], today.isoformat())
+    hist = _completed_history(get_kr_ohlcv(ticker, s["start"], today.isoformat()))
+    if hist is None or hist.empty:
+        raise ValueError("확정된 시세가 없어 알림 주문을 계산하지 못했습니다.")
+    if expected_close is not None:
+        hist = hist[hist.index.date <= expected_close]
+        if hist.empty or hist.index[-1].date() != expected_close:
+            raise ValueError("STALE_PRICES: 전 거래일 확정 종가가 없습니다.")
+    if cash_flows is None:
+        cash_flows = _load_local_rows(FLOWS_PATH)
+    if actual_buy_fills is None:
+        actual_buy_fills = _load_local_rows(ACTUAL_FILLS_PATH)
+    if guided_buy_qty is None:
+        guided_buy_qty = _load_local_rows(ORDER_GUIDES_PATH)
+
     res = run_jongsa(
         hist, "V5", initial_cash=s["seed"], target_return=s["tgt"],
         daily_buy_pct=s["daily_pct"], stop_days=stop, fee_rate=s["fee"],
@@ -128,6 +178,14 @@ def build_message(today: date = None, config: dict = None, cash_flows: list = No
         loss_reset_pct=s["loss_reset_pct"],
         loss_reset_threshold_pct=s["loss_reset_threshold_pct"],
         cash_flows=[(str(flow["날짜"]), float(flow["금액"])) for flow in (cash_flows or [])],
+        actual_buy_fills=[
+            (str(fill["날짜"]), float(fill["수량"]), float(fill["체결가"]))
+            for fill in (actual_buy_fills or [])
+        ],
+        guided_buy_qty=[
+            (str(guide["날짜"]), float(guide["수량"]))
+            for guide in (guided_buy_qty or [])
+        ],
     )
 
     last = res.daily_log.iloc[-1]
@@ -178,11 +236,31 @@ def build_message(today: date = None, config: dict = None, cash_flows: list = No
         loss_reset_threshold_pct=s["loss_reset_threshold_pct"],
     )
     # 배당은 하루 매수금 기준액에서 뺀다 (재투자하지 않으므로)
+    if expected_close is not None:
+        order_trade_date = today  # 거래소 달력으로 검증한 미국 주문일
+    else:
+        order_trade_date = close_date + timedelta(days=1)
+        while not is_us_market_open(order_trade_date.isoformat()):
+            order_trade_date += timedelta(days=1)
+    L[0] = f"📅 미국 {order_trade_date:%Y-%m-%d}({WEEKDAY_KR[order_trade_date.weekday()]}) {ticker} 주문"
     plan = order_plan(res.final_lots, res.final_cash, total - res.total_dividends, plan_cfg,
-                      today.isoformat(), trading_dates=hist.index)
+                      order_trade_date.isoformat(), trading_dates=hist.index)
+    guide_map = {
+        str(guide["날짜"]): float(guide["수량"])
+        for guide in (guided_buy_qty or [])
+        if "날짜" in guide and "수량" in guide
+    }
+    if order_trade_date.isoformat() in guide_map:
+        plan["매수"]["qty"] = guide_map[order_trade_date.isoformat()]
     forced, pending, buy = plan["강제매도"], plan["목표매도"], plan["매수"]
 
     # 텔레그램에서 주문값만 드래그해 복사할 수 있도록 설명 없는 짧은 영역을
+    if metadata is not None:
+        metadata.update(order_date=order_trade_date.isoformat(),
+                        close_date=close_date.isoformat(),
+                        buy_qty=float(buy["qty"]) if buy["type"] else 0.0,
+                        held_qty=float(last["보유수량"]))
+
     # 메시지 맨 위에 따로 만든다. 상세한 이유와 현황은 기존 본문에 남긴다.
     copy_orders = copyable_order_lines(plan)
     copy_block = ["📋 복사용 주문", *(copy_orders or ["주문 없음"]), ""]
@@ -240,7 +318,7 @@ def build_message(today: date = None, config: dict = None, cash_flows: list = No
     # ---------- 손절 예고 ----------
     # 목표 매도는 주문만 걸어두면 알아서 체결되지만, 손절은 날짜를 직접
     # 세야 해서 제일 놓치기 쉽다. 그래서 3영업일 전부터 미리 알린다.
-    held_of = make_held_counter(today.isoformat(), hist.index)
+    held_of = make_held_counter(order_trade_date.isoformat(), hist.index)
     soon = sorted(
         (stop - held_of(lot["buy_date"]), lot) for lot in res.final_lots
     )

@@ -607,6 +607,11 @@ if "order_guides" not in st.session_state:
     )
 
 
+if not is_shared_server():
+    from src.quantmix_cloud_ui import merge_sent_guides
+    merge_sent_guides(st)
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_price_history(ticker: str, start: str, end: str) -> pd.DataFrame:
     hist = get_kr_ohlcv(ticker, start, end)
@@ -2049,6 +2054,9 @@ with tab_help:
 
 # ============================================================ 알림
 with tab_notify:
+    if not is_shared_server():
+        from src.quantmix_cloud_ui import render_cloud_panel
+        render_cloud_panel(st)
     st.markdown("### 🔔 매일 텔레그램으로 받기")
     st.caption(
         "매 평일 정해진 시각에 **어젯밤 마감 결과 + 오늘 넣을 주문**을 한 통으로 보냅니다. "
