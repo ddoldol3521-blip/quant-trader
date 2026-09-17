@@ -2,8 +2,8 @@ name: QuantMix cloud Telegram
 
 on:
   schedule:
-    # KST 21:10. Exchange holidays are checked by the runner.
-    - cron: "10 12 * * 1-5"
+    # KST 21:10; 22:10 fallback skips if already sent. US holidays checked below.
+    - cron: "10 12,13 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:

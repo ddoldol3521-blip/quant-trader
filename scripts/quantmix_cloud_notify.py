@@ -49,7 +49,7 @@ def main():
                                 actual_buy_fills=profile["actual_buy_fills"],
                                 guided_buy_qty=guides, expected_close=previous,
                                 metadata=metadata)
-    payload = telegram_html(message, cutoff)
+    payload = telegram_html(message, cutoff, profile.get("account_note", ""))
     if os.environ.get("QUANTMIX_DRY_RUN") == "1":
         print("VALIDATED: fresh prices, complete private profile, encrypted outbox, order calculation")
         return

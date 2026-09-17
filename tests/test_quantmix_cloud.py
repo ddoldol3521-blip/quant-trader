@@ -166,6 +166,12 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(meta["held_qty"], 5.)
         self.assertIn("미국 2026-09-03", message)
 
+    def test_reconciliation_warning_precedes_copyable_orders(self):
+        text = "미국 주문\n\n📋 복사용 주문\nLOC 매수 | 40주\n\n상세"
+        out = telegram_html(text, datetime(2026, 9, 17, 19, 50, tzinfo=ZoneInfo("UTC")),
+                            "잔고 미정산 <확인>")
+        self.assertLess(out.index("잔고 미정산 &lt;확인&gt;"), out.index("<pre>"))
+
 
 if __name__ == "__main__":
     unittest.main()

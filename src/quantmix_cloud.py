@@ -168,7 +168,7 @@ def merged_guides(profile, state):
     return [rows[day] for day in sorted(rows)]
 
 
-def telegram_html(message: str, cutoff: datetime) -> str:
+def telegram_html(message: str, cutoff: datetime, account_note: str = "") -> str:
     marker = "📋 복사용 주문\n"
     if marker not in message:
         raise CloudError("MISSING_ORDER_BLOCK")
@@ -178,6 +178,7 @@ def telegram_html(message: str, cutoff: datetime) -> str:
     detail = "\n".join(line for line in detail.splitlines() if not line.startswith("⏰"))
     korea = cutoff.astimezone(ZoneInfo("Asia/Seoul"))
     result = ("<b>☁️ 퀀트믹스 서버 자동 알림</b>\n" + html.escape(before.strip())
+              + ("\n\n⚠️ " + html.escape(account_note) if account_note else "")
               + "\n\n📋 복사용 주문\n<pre>" + html.escape(orders) + "</pre>\n\n"
               + html.escape(detail.strip())
               + f"\n⏰ 주문 마감: 한국 {korea:%m/%d %H:%M}"

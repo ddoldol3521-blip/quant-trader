@@ -14,5 +14,6 @@ jongsa_actual_fills.json
 jongsa_order_guides.json
 jongsa_cloud.json
 jongsa_cloud_sync.json
+jongsa_reconciliation.json
 charts/
 .hfdata/

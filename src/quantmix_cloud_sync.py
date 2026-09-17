@@ -27,6 +27,9 @@ def local_profile():
                "price_overrides": read("jongsa_price_overrides.json"),
                # A bare public app URL opens default settings, not this account.
                "app_url": ""}
+    note_file = ROOT / "jongsa_reconciliation.json"
+    if note_file.exists():
+        profile["account_note"] = json.loads(note_file.read_text(encoding="utf-8"))["notification_warning"]
     return validate_profile(profile)
 
 

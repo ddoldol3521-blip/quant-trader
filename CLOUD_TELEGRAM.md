@@ -1,7 +1,8 @@
 # QuantMix PC-independent Telegram notifications
 
 The GitHub Actions workflow `jongsa-daily.yml` runs at 21:10 Korea time on
-weekdays. It does not need the desktop launcher or Streamlit to stay awake.
+weekdays, with a 22:10 fallback that skips already-delivered sessions.
+It does not need the desktop launcher or Streamlit to stay awake.
 GitHub may delay scheduled jobs; this is not an exact-time trading service.
 
 ## Account and security
@@ -18,6 +19,8 @@ GitHub may delay scheduled jobs; this is not an exact-time trading service.
 The account is a reconstruction from the recorded inputs, NOT a brokerage API.
 Actual sell discrepancies (including partial fills) must be reconciled before
 placing an order. This deployment does not assume or invent missing fills.
+An optional gitignored `jongsa_reconciliation.json` supplies a private
+`notification_warning` shown above the orders until reconciliation is complete.
 
 ## Daily behavior
 
