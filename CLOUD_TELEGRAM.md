@@ -1,7 +1,7 @@
 # QuantMix PC-independent Telegram notifications
 
-The GitHub Actions workflow `jongsa-daily.yml` runs at 21:10 Korea time on
-weekdays, with a 22:10 fallback that skips already-delivered sessions.
+The GitHub Actions workflow `jongsa-daily.yml` runs at 13:00 and 19:00 Korea
+time on weekdays, once per slot. The old 21:10/22:10 schedule is removed.
 It does not need the desktop launcher or Streamlit to stay awake.
 GitHub may delay scheduled jobs; this is not an exact-time trading service.
 
@@ -24,14 +24,20 @@ An optional gitignored `jongsa_reconciliation.json` supplies a private
 
 ## Daily behavior
 
-1. Determine the US exchange session using the NYSE calendar, including DST,
-   US holidays and shortened sessions. Skip closed days and expired orders.
+1. Target the US session with the Korean daytime calendar date, including at
+   13:00 KST in winter when New York is still on the preceding date. Use the
+   NYSE calendar for US holidays and shortened sessions. Skip closed days and
+   expired slots/orders; the afternoon slot expires when the evening slot starts.
 2. Require the preceding session's confirmed close. Missing data fails closed.
 3. Calculate with the same engine and explicit account inputs as the local app.
-4. Reserve the day in the encrypted outbox, then send one copy-friendly message.
+4. Reserve the day/slot in the encrypted outbox, then send one copy-friendly message.
 5. Record the Telegram message id and frozen quantity after successful delivery.
 
-A rerun of an already delivered day does not send it again. An ambiguous
+A rerun of an already delivered slot does not send it again. The second slot
+reuses the exact order saved in the encrypted outbox, with an explicit reminder
+not to place an additional order. Sent quantities remain one record per trading
+day for local synchronization. Legacy days without a saved message cannot be
+resent automatically. An ambiguous
 delivery (e.g. timeout after Telegram accepted it) is **not blindly retried**:
 the workflow fails and asks the owner to check. Never duplicate orders based on
 a repeated notification. A failed run sends an error alert when Telegram is
@@ -67,7 +73,8 @@ python scripts/sync_quantmix_cloud.py --force
 
 - Run tests: `python -m unittest discover -s tests -p test_quantmix_cloud.py -v`.
 - Actions → Run workflow → `dry_run=true`: validate without sending.
-- `dry_run=false`: deliver for the current US session if still before cutoff.
+- `dry_run=false`: deliver for today's Korean-dated US session and the selected
+  time slot (13:00 before 19:00 KST; 19:00 afterwards), if still before cutoff.
 - Disabling the workflow stops scheduled delivery. It does not stop the local
   on-demand bot; the two are independent.
 - A successful send proves API acceptance, not that a phone displayed/read it.

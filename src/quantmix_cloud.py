@@ -78,14 +78,16 @@ def validate_profile(profile: dict) -> dict:
     return profile
 
 
-def trading_context(now: datetime):
+def trading_context(now: datetime, *, session_date: date | None = None):
     """NYSE date, previous session, exact cutoff; respects DST/early closes."""
     import pandas_market_calendars as mcal
 
     if now.tzinfo is None:
         raise CloudError("TIMEZONE_REQUIRED")
     ny = now.astimezone(ZoneInfo("America/New_York"))
-    day = ny.date()
+    # Korean daytime reminders target that evening's US session. At 13:00 KST
+    # in winter it is still the previous date in New York.
+    day = session_date or ny.date()
     schedule = mcal.get_calendar("NYSE").schedule(day - timedelta(days=15), day)
     sessions = {stamp.date(): row for stamp, row in schedule.iterrows()}
     if day not in sessions:
@@ -95,6 +97,29 @@ def trading_context(now: datetime):
         return None  # never deliver an already-expired order
     previous = max(d for d in sessions if d < day)
     return day, previous, cutoff
+
+
+def notification_slot(now: datetime, schedule: str = ""):
+    """Resolve each cron independently, rejecting delayed, expired slots."""
+    if now.tzinfo is None:
+        raise CloudError("TIMEZONE_REQUIRED")
+    korea = now.astimezone(ZoneInfo("Asia/Seoul"))
+    schedules = {"0 4 * * 1-5": "13:00", "0 10 * * 1-5": "19:00"}
+    if schedule:
+        if schedule not in schedules:
+            raise CloudError("UNKNOWN_NOTIFICATION_SCHEDULE")
+        slot = schedules[schedule]
+        if not ((slot == "13:00" and 13 <= korea.hour < 19)
+                or (slot == "19:00" and 19 <= korea.hour < 24)):
+            return None
+    else:
+        slot = "13:00" if korea.hour < 19 else "19:00"
+    return korea.date(), slot
+
+
+def slot_sent(state, day, slot):
+    delivery = state["deliveries"].get(day, {})
+    return delivery.get("slots", {}).get(slot, {}).get("status") == "sent"
 
 
 def github_token() -> str:
@@ -159,6 +184,8 @@ class GitHubStore:
 def merged_guides(profile, state):
     rows = {row["날짜"]: dict(row) for row in profile["guided_buy_qty"]}
     for day, delivery in state["deliveries"].items():
+        if any(item.get("status") != "sent" for item in delivery.get("slots", {}).values()):
+            raise CloudError("PREVIOUS_DELIVERY_UNCONFIRMED")
         if delivery["status"] == "sent":
             # A sent order's quantity is immutable. Real fill overrides still win
             # inside run_jongsa if the user actually filled a different quantity.
@@ -188,20 +215,46 @@ def telegram_html(message: str, cutoff: datetime, account_note: str = "") -> str
     return result
 
 
-def deliver_once(store, state, sha, day, message, buy_qty, send):
+def deliver_once(store, state, sha, day, message, buy_qty, send, *, slot=None):
+    if slot is not None and slot not in ("13:00", "19:00"):
+        raise CloudError("INVALID_NOTIFICATION_SLOT")
     existing = state["deliveries"].get(day)
     if existing:
-        if existing["status"] == "sent":
+        if existing["status"] != "sent":
+            raise CloudError("DELIVERY_UNCONFIRMED")
+        if slot is None or slot_sent(state, day, slot):
             return "already_sent"
-        raise CloudError("DELIVERY_UNCONFIRMED")
+        if any(item.get("status") != "sent" for item in existing.get("slots", {}).values()):
+            raise CloudError("DELIVERY_UNCONFIRMED")
+        # Reuse the first sent order exactly; a reminder must not silently
+        # change quantities or turn into an additional order.
+        if not existing.get("message"):
+            raise CloudError("LEGACY_DELIVERY_HAS_NO_SAVED_MESSAGE")
+        message = existing["message"]
+        buy_qty = existing["buy_qty"]
+    base_message = message
+    if slot:
+        message = (f"<b>한국 {slot} 주문 알림</b>\n"
+                   "※ 같은 거래일 주문표입니다. 이미 주문했다면 추가 주문하지 마세요.\n\n"
+                   + message)
+        if len(message) > 4096:
+            raise CloudError("MESSAGE_TOO_LONG")
     delivery = {"status": "sending", "buy_qty": buy_qty,
                 "digest": hashlib.sha256(message.encode()).hexdigest(),
                 "created_at": datetime.now(ZoneInfo("UTC")).isoformat()}
-    state["deliveries"][day] = delivery
+    if existing:
+        existing.setdefault("slots", {})[slot] = delivery
+    else:
+        state["deliveries"][day] = delivery
+        if slot:
+            delivery["message"] = base_message  # encrypted at rest, never logged
+            delivery["slots"] = {slot: {"status": "sending"}}
     sha = store.write(state, sha)  # MUST reserve before touching Telegram
     # No automatic retry after an ambiguous timeout. A message may have arrived.
     message_id = send(message)
     delivery.update(status="sent", message_id=message_id)
+    if slot and not existing:
+        delivery["slots"][slot] = {"status": "sent", "message_id": message_id}
     store.write(state, sha)
     return "sent"
 

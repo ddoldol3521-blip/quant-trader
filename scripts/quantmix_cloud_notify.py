@@ -9,12 +9,20 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.quantmix_cloud import (CloudError, GitHubStore, deliver_once, merged_guides,
-                               send_cloud_telegram, telegram_html, trading_context,
+                               notification_slot, slot_sent, send_cloud_telegram,
+                               telegram_html, trading_context,
                                validate_profile)
 
 
 def main():
-    context = trading_context(datetime.now(ZoneInfo("UTC")))
+    now = datetime.now(ZoneInfo("UTC"))
+    schedule = os.environ.get("QUANTMIX_SCHEDULE", "")
+    notification = notification_slot(now, schedule)
+    if notification is None:
+        print("SKIP: notification slot expired")
+        return
+    session_date, slot = notification
+    context = trading_context(now, session_date=session_date)
     if context is None:
         print("SKIP: exchange closed or order deadline passed")
         return
@@ -25,10 +33,22 @@ def main():
     store = GitHubStore(os.environ["QUANTMIX_REPOSITORY"], os.environ["GH_TOKEN"],
                         os.environ["QUANTMIX_STATE_KEY"])
     state, sha = store.read()
-    if state["deliveries"].get(day.isoformat(), {}).get("status") == "sent":
-        print("SKIP: already delivered for this US session")
+    dry_run = os.environ.get("QUANTMIX_DRY_RUN") == "1"
+    if slot_sent(state, day.isoformat(), slot) and not dry_run:
+        print("SKIP: already delivered for this notification slot")
         return
     guides = merged_guides(profile, state)
+    existing = state["deliveries"].get(day.isoformat(), {})
+    if existing.get("status") == "sent" and not dry_run:
+        if datetime.now(ZoneInfo("UTC")) >= cutoff:
+            raise CloudError("ORDER_DEADLINE_PASSED")
+        if schedule and notification_slot(datetime.now(ZoneInfo("UTC")), schedule) != notification:
+            print("SKIP: notification slot expired during processing")
+            return
+        result = deliver_once(store, state, sha, day.isoformat(), "",
+                              existing["buy_qty"], send_cloud_telegram, slot=slot)
+        print(f"REMINDER: {result}; original order reused")
+        return
     # Never allow stale, separately configured legacy env vars to override the
     # full validated profile. There is exactly one source of account settings.
     for key in list(os.environ):
@@ -50,14 +70,17 @@ def main():
                                 guided_buy_qty=guides, expected_close=previous,
                                 metadata=metadata)
     payload = telegram_html(message, cutoff, profile.get("account_note", ""))
-    if os.environ.get("QUANTMIX_DRY_RUN") == "1":
+    if dry_run:
         print("VALIDATED: fresh prices, complete private profile, encrypted outbox, order calculation")
         return
     # Recheck time after slow downloads; never send an expired order.
     if datetime.now(ZoneInfo("UTC")) >= cutoff:
         raise CloudError("ORDER_DEADLINE_PASSED")
+    if schedule and notification_slot(datetime.now(ZoneInfo("UTC")), schedule) != notification:
+        print("SKIP: notification slot expired during processing")
+        return
     result = deliver_once(store, state, sha, day.isoformat(), payload,
-                          metadata["buy_qty"], send_cloud_telegram)
+                          metadata["buy_qty"], send_cloud_telegram, slot=slot)
     print(f"DELIVERY: {result}; private order details omitted")
 
 

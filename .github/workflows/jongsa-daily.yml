@@ -2,8 +2,9 @@ name: QuantMix cloud Telegram
 
 on:
   schedule:
-    # KST 21:10; 22:10 fallback skips if already sent. US holidays checked below.
-    - cron: "10 12,13 * * 1-5"
+    # KST 13:00 and 19:00, one notification per slot. US holidays checked below.
+    - cron: "0 4 * * 1-5"
+    - cron: "0 10 * * 1-5"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -31,6 +32,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       QUANTMIX_REPOSITORY: ${{ github.repository }}
       QUANTMIX_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+      QUANTMIX_SCHEDULE: ${{ github.event.schedule }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

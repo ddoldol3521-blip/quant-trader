@@ -10,7 +10,8 @@ from cryptography.fernet import Fernet
 
 from src.jongsa_live import DEFAULT_CONFIG
 from src.quantmix_cloud import (CloudError, GitHubStore, deliver_once, merged_guides,
-                               telegram_html, trading_context, validate_profile)
+                               notification_slot, slot_sent, telegram_html,
+                               trading_context, validate_profile)
 
 
 def profile():
@@ -171,6 +172,102 @@ class CloudTests(unittest.TestCase):
         out = telegram_html(text, datetime(2026, 9, 17, 19, 50, tzinfo=ZoneInfo("UTC")),
                             "잔고 미정산 <확인>")
         self.assertLess(out.index("잔고 미정산 &lt;확인&gt;"), out.index("<pre>"))
+
+    def test_both_korean_slots_across_dst(self):
+        for month, day in ((9, 21), (12, 21)):
+            for hour, schedule in ((13, "0 4 * * 1-5"), (19, "0 10 * * 1-5")):
+                with self.subTest(month=month, hour=hour):
+                    now = datetime(2026, month, day, hour, tzinfo=ZoneInfo("Asia/Seoul"))
+                    session, slot = notification_slot(now, schedule)
+                    self.assertEqual(slot, f"{hour}:00")
+                    context = trading_context(now, session_date=session)
+                    self.assertEqual(context[0], date(2026, month, day))
+
+    def test_winter_monday_afternoon_previous_session_is_friday(self):
+        now = datetime(2026, 12, 21, 13, tzinfo=ZoneInfo("Asia/Seoul"))
+        self.assertEqual(now.astimezone(ZoneInfo("America/New_York")).date(), date(2026, 12, 20))
+        day, _ = notification_slot(now, "0 4 * * 1-5")
+        self.assertEqual(trading_context(now, session_date=day)[1], date(2026, 12, 18))
+
+    def test_korean_daytime_holidays_and_weekends_skipped(self):
+        for day in (date(2026, 9, 7), date(2026, 9, 12), date(2026, 12, 25)):
+            for hour in (13, 19):
+                now = datetime(day.year, day.month, day.day, hour, tzinfo=ZoneInfo("Asia/Seoul"))
+                self.assertIsNone(trading_context(now, session_date=day))
+
+    def test_delayed_slots_do_not_overlap(self):
+        korea = ZoneInfo("Asia/Seoul")
+        self.assertIsNotNone(notification_slot(datetime(2026, 9, 21, 13, 35, tzinfo=korea),
+                                               "0 4 * * 1-5"))
+        self.assertIsNone(notification_slot(datetime(2026, 9, 21, 19, tzinfo=korea),
+                                            "0 4 * * 1-5"))
+        self.assertIsNone(notification_slot(datetime(2026, 9, 22, 0, tzinfo=korea),
+                                            "0 10 * * 1-5"))
+        with self.assertRaises(CloudError):
+            notification_slot(datetime(2026, 9, 21, 22, tzinfo=korea), "10 12,13 * * 1-5")
+
+    def test_two_slots_send_once_each_and_reuse_original_order(self):
+        from unittest.mock import Mock
+        store = Mock()
+        store.write.return_value = "nextsha"
+        state = {"version": 1, "deliveries": {}}
+        sent = []
+        def send(message):
+            sent.append(message)
+            return len(sent)
+        for slot in ("13:00", "13:00", "19:00", "19:00"):
+            evening = slot == "19:00"
+            deliver_once(store, state, "sha", "2026-09-22",
+                         "changed order" if evening else "original order", 40, send, slot=slot)
+        self.assertEqual(len(sent), 2)
+        self.assertIn("한국 13:00", sent[0])
+        self.assertIn("한국 19:00", sent[1])
+        self.assertIn("original order", sent[1])
+        self.assertNotIn("changed order", sent[1])
+        self.assertIn("추가 주문하지 마세요", sent[1])
+        self.assertTrue(slot_sent(state, "2026-09-22", "13:00"))
+        self.assertTrue(slot_sent(state, "2026-09-22", "19:00"))
+        self.assertEqual(store.write.call_count, 4)
+        self.assertEqual(merged_guides(profile(), state), [{"날짜": "2026-09-22", "수량": 40}])
+
+    def test_evening_can_be_first_send(self):
+        from unittest.mock import Mock
+        store = Mock()
+        state = {"deliveries": {}}
+        deliver_once(store, state, "sha", "2026-09-22", "order", 40,
+                     lambda _: 100, slot="19:00")
+        self.assertTrue(slot_sent(state, "2026-09-22", "19:00"))
+        self.assertFalse(slot_sent(state, "2026-09-22", "13:00"))
+
+    def test_uncertain_evening_delivery_blocks_retry_and_future_orders(self):
+        from unittest.mock import Mock
+        writes = []
+        class Store:
+            def write(self, state, sha):
+                writes.append(copy.deepcopy(state))
+                return "sha"
+        store = Store()
+        state = {"deliveries": {}}
+        deliver_once(store, state, "sha", "2026-09-22", "order", 40, lambda _: 1, slot="13:00")
+        def timeout(_):
+            self.assertEqual(writes[-1]["deliveries"]["2026-09-22"]["slots"]["19:00"]["status"],
+                             "sending")
+            raise TimeoutError()
+        with self.assertRaises(TimeoutError):
+            deliver_once(store, state, "sha", "2026-09-22", "order", 40, timeout, slot="19:00")
+        send = Mock()
+        with self.assertRaises(CloudError):
+            deliver_once(store, state, "sha", "2026-09-22", "order", 40, send, slot="19:00")
+        with self.assertRaises(CloudError):
+            merged_guides(profile(), state)
+        send.assert_not_called()
+
+    def test_legacy_sent_guides_remain_valid_but_cannot_be_resent(self):
+        state = {"deliveries": {"2026-09-21": {"status": "sent", "buy_qty": 40}}}
+        self.assertEqual(merged_guides(profile(), state)[0]["수량"], 40)
+        with self.assertRaisesRegex(CloudError, "LEGACY_DELIVERY_HAS_NO_SAVED_MESSAGE"):
+            deliver_once(None, state, "sha", "2026-09-21", "recalculated", 41,
+                         lambda _: self.fail("must not send"), slot="19:00")
 
 
 if __name__ == "__main__":

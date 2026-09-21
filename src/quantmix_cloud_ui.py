@@ -39,7 +39,7 @@ def render_cloud_panel(st):
     try:
         from src.quantmix_cloud_sync import sync_profile
         sync_profile()
-        st.success("서버 알림 연결 · 미국 거래일 한국 저녁 9시 10분 예약")
+        st.success("서버 알림 연결 · 미국 거래일 한국 오후 1시·오후 7시 각각 1회 예약")
         st.caption("설정·입출금·매수 체결 기록의 변경사항을 서버에 동기화했습니다. "
                    "미국 휴장일 제외 · 실행이 지연될 수 있습니다. 증권사 잔고 자동 연동은 아닙니다.")
     except Exception:
