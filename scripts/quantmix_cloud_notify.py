@@ -12,6 +12,7 @@ from src.quantmix_cloud import (CloudError, GitHubStore, deliver_once, merged_gu
                                notification_slot, slot_sent, send_cloud_telegram,
                                telegram_html, trading_context,
                                validate_profile)
+from src.data.verified_close import PriceDataError, load_notification_history
 
 
 def main():
@@ -64,11 +65,17 @@ def main():
         override_file = Path(folder) / "prices.json"
         override_file.write_text(json.dumps(profile.get("price_overrides", {})), encoding="utf-8")
         kr_data.PRICE_OVERRIDES_PATH = override_file
+        history, quotes = load_notification_history(
+            profile["config"]["ticker"], profile["config"]["start_date"], day.isoformat(),
+            previous, state.get("verified_closes", {}))
+        state["verified_closes"] = quotes
         message = build_message(day, config=profile["config"],
                                 cash_flows=profile["cash_flows"],
                                 actual_buy_fills=profile["actual_buy_fills"],
                                 guided_buy_qty=guides, expected_close=previous,
-                                metadata=metadata)
+                                metadata=metadata, price_history=history)
+    if previous.isoformat() in quotes:
+        message += f"\nℹ️ {previous:%m/%d} 종가는 날짜가 확인된 운용사 공식 자료로 보완했습니다."
     payload = telegram_html(message, cutoff, profile.get("account_note", ""))
     if dry_run:
         print("VALIDATED: fresh prices, complete private profile, encrypted outbox, order calculation")
@@ -84,13 +91,24 @@ def main():
     print(f"DELIVERY: {result}; private order details omitted")
 
 
+def report_failure(code):
+    # Only a safe machine code reaches Actions outputs and the failure message.
+    import re
+    code = code if re.fullmatch(r"[A-Z][A-Z0-9_]{0,79}", code) else "UNEXPECTED_ERROR"
+    print(f"NOTIFICATION_FAILED: {code}", file=sys.stderr)
+    output = os.environ.get("GITHUB_OUTPUT")
+    if output:
+        with open(output, "a", encoding="utf-8") as stream:
+            stream.write(f"failure_code={code}\n")
+
+
 if __name__ == "__main__":
     try:
         main()
-    except CloudError as error:
-        print(f"NOTIFICATION_FAILED: {error}", file=sys.stderr)
+    except (CloudError, PriceDataError) as error:
+        report_failure(str(error))
         sys.exit(1)
     except Exception as error:
         # Exception strings may contain token-bearing URLs or private inputs.
-        print(f"NOTIFICATION_FAILED: {type(error).__name__}", file=sys.stderr)
+        report_failure("UNEXPECTED_ERROR")
         sys.exit(1)

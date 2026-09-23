@@ -146,7 +146,8 @@ def copyable_order_lines(plan: dict) -> list[str]:
 
 def build_message(today: date = None, config: dict = None, cash_flows: list = None,
                   actual_buy_fills: list = None, guided_buy_qty: list = None,
-                  expected_close: date = None, metadata: dict = None) -> str:
+                  expected_close: date = None, metadata: dict = None,
+                  price_history: pd.DataFrame = None) -> str:
     """오늘 보낼 메시지 전체를 만든다."""
     s = settings(config)
     ticker, stop, rng = s["ticker"], s["stop"], s["rng"]
@@ -154,7 +155,8 @@ def build_message(today: date = None, config: dict = None, cash_flows: list = No
         raise ValueError("시작일이 비어 있습니다. 앱에서 시작일을 정하고 저장하세요.")
 
     today = today or date.today()
-    hist = _completed_history(get_kr_ohlcv(ticker, s["start"], today.isoformat()))
+    hist = _completed_history(price_history if price_history is not None else
+                              get_kr_ohlcv(ticker, s["start"], today.isoformat()))
     if hist is None or hist.empty:
         raise ValueError("확정된 시세가 없어 알림 주문을 계산하지 못했습니다.")
     if expected_close is not None:

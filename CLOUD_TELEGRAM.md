@@ -29,6 +29,14 @@ An optional gitignored `jongsa_reconciliation.json` supplies a private
    NYSE calendar for US holidays and shortened sessions. Skip closed days and
    expired slots/orders; the afternoon slot expires when the evening slot starts.
 2. Require the preceding session's confirmed close. Missing data fails closed.
+   Retry the long and recent price windows up to three times. For a missing SOXL
+   close only, use Direxion's dated **Market Price Closing**, never its NAV or an
+   intraday quote. A changed page format, wrong date, or unresolved older session
+   gap still blocks delivery. No synthetic OHLC values are created.
+   Verified issuer closes are stored in the encrypted outbox when delivery is
+   reserved, so an older missing date is not lost on the next day's calculation.
+   Disagreement with a later primary quote blocks delivery for review. This does
+   not edit actual fills, settings, or the manual price-override file.
 3. Calculate with the same engine and explicit account inputs as the local app.
 4. Reserve the day/slot in the encrypted outbox, then send one copy-friendly message.
 5. Record the Telegram message id and frozen quantity after successful delivery.
@@ -71,7 +79,7 @@ python scripts/sync_quantmix_cloud.py --force
 
 ## Verification / operation
 
-- Run tests: `python -m unittest discover -s tests -p test_quantmix_cloud.py -v`.
+- Run tests: `python -m unittest discover -s tests -p 'test_quantmix_cloud*.py' -v`.
 - Actions → Run workflow → `dry_run=true`: validate without sending.
 - `dry_run=false`: deliver for today's Korean-dated US session and the selected
   time slot (13:00 before 19:00 KST; 19:00 afterwards), if still before cutoff.
