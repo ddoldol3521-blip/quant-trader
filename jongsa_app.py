@@ -23,10 +23,8 @@ from src.jongsa_live import BUY_RANGE_SKIPS_15Y, BUY_RANGE_VS_NOLIMIT, PRESETS, 
 from src.jongsa_live import apply_preset, is_shared_server, load_config, save_config
 from src.jongsa_live import is_us_market_open, make_held_counter, order_plan, target_price_for
 from src.jongsa_notify import build_message, send_now
-from src.scheduler import (JONGSA_TASK_NAME, get_jongsa_task_status, load_jongsa_notify_config,
-                           register_jongsa_task, remove_jongsa_task, save_jongsa_notify_config)
 from src.telegram_notify import find_chat_id, load_telegram_config, save_telegram_config
-from src.trend_pulse import make_plan as make_trend_pulse_plan
+from src.trend_pulse import CANDIDATE_PRESETS, make_candidate_plan
 
 
 # 비교 탭 전용 연구 후보. 배포 서버가 모듈 두 개를 서로 다른 시점의 버전으로
@@ -377,7 +375,7 @@ def cfg_to_url(cfg: dict, flows: list) -> None:
 def pulse_cfg_from_url() -> dict:
     """퀀트믹스와 섞이지 않는 트렌드 펄스 전용 설정."""
     qp=st.query_params
-    out={"capital":10000.0,"today_open":0.0,"stops":0,"held":0}
+    out={"capital":10000.0,"today_open":0.0,"stops":0,"held":0,"preset":"신규 균형형"}
     for key,name,cast in (("ptc","capital",float),("pto","today_open",float),
                           ("pts","stops",int),("pth","held",int)):
         if key in qp:
@@ -385,13 +383,16 @@ def pulse_cfg_from_url() -> dict:
                 out[name]=cast(qp[key])
             except (ValueError,TypeError):
                 pass
+    if "ptp" in qp and str(qp["ptp"]) in CANDIDATE_PRESETS:
+        out["preset"]=str(qp["ptp"])
     return out
 
 
 def pulse_cfg_to_url(pulse: dict) -> None:
     params=st.query_params.to_dict()
     params.update({"ptc":f"{pulse['capital']:g}","pto":f"{pulse['today_open']:g}",
-                   "pts":str(int(pulse['stops'])),"pth":str(int(pulse['held']))})
+                   "pts":str(int(pulse['stops'])),"pth":str(int(pulse['held'])),
+                   "ptp":str(pulse.get("preset","신규 균형형"))})
     st.query_params.from_dict(params)
 
 
@@ -402,8 +403,20 @@ if "pulse_cfg" not in st.session_state:
     st.session_state.pulse_cfg=pulse_cfg_from_url()
 
 
+CUSTOM_PRESET_LABEL = "직접 설정 (프리셋 아님)"
+
+
 def matching_preset_name(config: dict) -> str:
-    """현재 숫자 설정과 같은 프리셋 이름. 직접 수정한 설정이면 균형형을 표시한다."""
+    """현재 숫자 설정과 같은 프리셋 이름. 맞는 것이 없으면 '직접 설정'.
+
+    예전에는 맞는 프리셋이 없을 때 "균형형 ⭐ 추천" 을 돌려줬다. 그래서 화면에
+    "현재 실제 적용: 균형형" 이 뜨는데 실제 계산은 전혀 다른 숫자로 돌아갔다.
+    (옛 기본값 2.75% / 10일 / 사다리3 / 리셋없음 상태에서 그랬다)
+
+    처음 들어온 사람은 균형형 성과표를 보면서 다른 설정의 주문을 받는다.
+    돈이 걸린 화면에서 '모르면 균형형이라고 해두자' 는 안 된다.
+    맞는 게 없으면 없다고 말한다.
+    """
     keys = (
         "daily_buy_pct", "target_return", "stop_days", "sell_day_buy_mode",
         "loss_reset_pct", "loss_reset_threshold_pct", "ladder_rungs",
@@ -417,7 +430,7 @@ def matching_preset_name(config: dict) -> str:
             return actual == expected
         if all(same_value(key) for key in keys):
             return name
-    return "균형형 ⭐ 추천"
+    return CUSTOM_PRESET_LABEL
 
 # 모든 프리셋이 공유하는 실행 원칙. 숫자와 리셋 규칙은 현재 설정에 맞춰 바뀐다.
 RULES_MD = """
@@ -731,10 +744,22 @@ with tab_home:
         )
         # selectbox의 브라우저 위젯 상태는 설정 파일과 별도로 남는다. 실제 설정이
         # 바뀌었을 때만 선택 상자도 동기화해 "계산은 공격형, 표시는 균형형"을 막는다.
+        #
+        # '직접 설정' 은 PRESETS 에 없는 이름이라 selectbox 에 넣으면 터진다.
+        # 그때는 선택 상자를 건드리지 않고, 아래 안내로만 알린다.
+        _is_custom = _current_preset == CUSTOM_PRESET_LABEL
         if st.session_state.get("_quick_preset_signature") != _preset_signature:
             st.session_state._quick_preset_signature = _preset_signature
-            st.session_state.quick_preset = _current_preset
-        st.caption(f"현재 실제 적용: **{_current_preset}**")
+            if not _is_custom:
+                st.session_state.quick_preset = _current_preset
+        if _is_custom:
+            st.warning(
+                "**지금은 프리셋이 아닌 직접 설정으로 계산되고 있습니다.** "
+                "아래 성과표의 숫자는 프리셋 기준이라 지금 설정과 다릅니다. "
+                "프리셋을 쓰시려면 아래에서 고른 뒤 **[이 전략으로 설정]** 을 눌러 주세요."
+            )
+        else:
+            st.caption(f"현재 실제 적용: **{_current_preset}**")
         quick1, quick2 = st.columns([3, 1])
         with quick1:
             quick_preset = st.selectbox(
@@ -2057,9 +2082,9 @@ with tab_notify:
     if not is_shared_server():
         from src.quantmix_cloud_ui import render_cloud_panel
         render_cloud_panel(st)
-    st.markdown("### 🔔 매일 텔레그램으로 받기")
+    st.markdown("### 🔔 필요할 때 텔레그램으로 받기")
     st.caption(
-        "매 평일 정해진 시각에 **어젯밤 마감 결과 + 오늘 넣을 주문**을 한 통으로 보냅니다. "
+        "텔레그램 봇에게 **`주문`**이라고 보내면 그때 최신 **어젯밤 마감 결과 + 오늘 넣을 주문**을 답장합니다. "
         "최대 보유기간 종료가 3거래일 안으로 다가온 물량도 미리 알려줍니다. 목표 매도는 주문만 걸어두면 "
         "자동으로 체결되지만, 기간 종료는 날짜를 직접 세야 해서 놓치기 쉽습니다."
     )
@@ -2080,8 +2105,6 @@ else:
             saved_token, saved_chat = load_telegram_config()
         except (FileNotFoundError, ValueError):
             saved_token, saved_chat = "", ""
-        nt = load_jongsa_notify_config()
-
         # ---------------------------------------------- 1단계: 봇 연결
         st.markdown("#### 1단계 — 봇 연결")
         with st.expander("봇을 아직 안 만들었다면 (5분)"):
@@ -2159,55 +2182,16 @@ else:
 
         st.divider()
 
-        # ---------------------------------------------- 3단계: 예약
-        st.markdown("#### 3단계 — 매일 자동으로 받기")
-
-        task = get_jongsa_task_status()
-        if task["exists"]:
-            st.success(f"**예약이 켜져 있습니다** — 매 평일 {nt['time']} 에 보냅니다.")
-        else:
-            st.warning("아직 예약이 꺼져 있습니다. 아래에서 켜세요.")
-
-        t1, t2 = st.columns([1, 2])
-        with t1:
-            hh, mm = (nt["time"].split(":") + ["0"])[:2]
-            send_at = st.time_input("보낼 시각", value=dtime(int(hh), int(mm)), step=1800)
-        with t2:
-            app_url = st.text_input(
-                "앱 주소 (선택)", value=nt.get("app_url", ""),
-                help="넣으면 메시지 아래에 링크로 붙습니다. 휴대폰에서 바로 열 때 편합니다.",
-            )
-
-        r1, r2 = st.columns(2)
-        with r1:
-            if st.button("⏰ 자동 발송 켜기", type="primary", width="stretch",
-                         disabled=not (saved_token and saved_chat)):
-                hhmm = send_at.strftime("%H:%M")
-                try:
-                    save_jongsa_notify_config({"time": hhmm, "app_url": app_url.strip()})
-                    register_jongsa_task(hhmm)
-                    st.success(f"켰습니다 — 매 평일 {hhmm}.")
-                    st.rerun()
-                except (RuntimeError, OSError) as e:
-                    st.error(f"예약을 걸지 못했습니다 — {e}")
-        with r2:
-            if st.button("예약 끄기", width="stretch", disabled=not task["exists"]):
-                try:
-                    remove_jongsa_task()
-                    st.success("껐습니다.")
-                    st.rerun()
-                except (RuntimeError, OSError) as e:
-                    st.error(f"해제하지 못했습니다 — {e}")
-
+        # ---------------------------------------------- 3단계: 요청해서 받기
+        st.markdown("#### 3단계 — 텔레그램에서 요청하기")
+        st.success("봇에게 **`주문`**이라고 보내세요. 계산이 끝나면 복사용 주문과 상세 주문표가 옵니다.")
         st.caption(
-            f"윈도우 작업 스케줄러에 **{JONGSA_TASK_NAME}** 이름으로 등록됩니다. "
-            "**이 PC가 켜져 있고 로그인돼 있어야** 보내집니다. 주말에는 미국장이 안 열려 "
-            "금요일과 같은 내용이 또 오므로 평일만 돌립니다.\n\n"
-            "PC를 꺼놔도 받고 싶다면 GitHub에서 돌리는 방법이 **TELEGRAM.md**에 있습니다."
+            "`오늘 주문`, `퀀트믹스`, `/order`도 사용할 수 있습니다. "
+            "이 요청 답장은 **PC에서 퀀트믹스가 실행 중일 때** 동작합니다. "
+            "위 서버 자동 알림은 PC를 꺼도 예약된 시각에 발송됩니다."
         )
         st.caption(
-            "봇 토큰은 `telegram_config.json`, 알림 설정은 `jongsa_notify.json`에 "
-            "저장되며 둘 다 깃허브에 올라가지 않습니다."
+            "봇 토큰은 `telegram_config.json`에 저장되며 깃허브에 올라가지 않습니다."
         )
 
 # ============================================================ 트렌드 펄스
@@ -2225,37 +2209,37 @@ with tab_pulse:
     pcfg=st.session_state.pulse_cfg
     p1,p2,p3,p4=st.columns(4)
     with p1:
+        pulse_preset=st.selectbox(
+            "전략 프리셋",list(CANDIDATE_PRESETS.keys()),
+            index=list(CANDIDATE_PRESETS.keys()).index(pcfg.get("preset","신규 균형형")),
+            help="수익형에서 초방어형으로 갈수록 급락 시 투자비중을 더 줄입니다.",key="pulse_preset_input")
+    with p2:
         pulse_capital=st.number_input(
             "트렌드 펄스 전용자금($)",min_value=100.0,value=float(pcfg["capital"]),step=1000.0,
             help="퀀트믹스 자금과 별도로 배정한 금액입니다.",key="pulse_capital_input")
-    with p2:
+    with p3:
         pulse_open=st.number_input(
             "오늘 미국 정규장 시가($)",min_value=0.0,value=float(pcfg["today_open"]),step=0.01,format="%.2f",
             help="미국 정규장이 열린 뒤 확인한 SOXL 시가를 입력하세요. 한국시간 밤 또는 새벽 날짜가 아니라 미국 거래일의 시가입니다.",
             key="pulse_open_input")
-    with p3:
-        pulse_stops=st.number_input(
-            "최근 연속 손절 횟수",min_value=0,max_value=2,value=int(pcfg["stops"]),step=1,
-            help="수비모드 비중 계산용입니다. 손절이 없었으면 0, 직전 수비거래가 손절이면 1, 두 번 이상 연속이면 2입니다.",
-            key="pulse_stops_input")
     with p4:
         pulse_held=st.number_input(
             "어제부터 보유한 수량",min_value=0,value=int(pcfg["held"]),step=1,
             help="전날 트렌드 펄스로 산 SOXL 수량입니다. 오늘 시가에 먼저 전량 매도합니다.",key="pulse_held_input")
 
     if st.button("⚡ 오늘 트렌드 펄스 주문 계산",type="primary",width="stretch",key="pulse_calc"):
-        pcfg.update({"capital":float(pulse_capital),"today_open":float(pulse_open),
-                     "stops":int(pulse_stops),"held":int(pulse_held)})
+        pcfg.update({"preset":pulse_preset,"capital":float(pulse_capital),"today_open":float(pulse_open),
+                     "stops":0,"held":int(pulse_held)})
         pulse_cfg_to_url(pcfg)
         if pulse_open<=0:
             st.session_state.pop("pulse_plan",None)
             st.error("미국 정규장 시가를 입력해 주세요.")
         else:
             try:
-                with st.spinner("최근 5년 시세와 오늘 모드를 계산하고 있습니다..."):
+                with st.spinner("전체 시세와 오늘 모드를 계산하고 있습니다..."):
                     pulse_hist=load_price_history("SOXL","2010-01-01",date.today().isoformat())
-                    st.session_state.pulse_plan=make_trend_pulse_plan(
-                        pulse_hist,float(pulse_open),float(pulse_capital),int(pulse_stops))
+                    st.session_state.pulse_plan=make_candidate_plan(
+                        pulse_hist,float(pulse_open),float(pulse_capital),pulse_preset)
             except (ValueError,RuntimeError,OSError) as ex:
                 st.session_state.pop("pulse_plan",None)
                 st.error(f"계산하지 못했습니다 — {ex}")
@@ -2266,7 +2250,7 @@ with tab_pulse:
         st.markdown(
             "1. 미국 정규장이 열리면 **SOXL 시가**를 입력합니다.\n"
             "2. 전날 산 물량이 있으면 **보유 수량**을 입력합니다.\n"
-            "3. 계산 버튼을 누르고 표시된 매도·매수·손절 주문을 넣습니다.\n"
+            "3. 계산 버튼을 누르고 표시된 매도·매수 주문을 넣습니다.\n"
             "4. 오늘 산 물량은 다음 미국 거래일 시가에 전량 매도합니다."
         )
     else:
@@ -2275,9 +2259,9 @@ with tab_pulse:
         st.caption(plan.mode_reason)
         m1,m2,m3,m4=st.columns(4)
         m1.metric("현재 모드",plan.mode)
-        m2.metric("50일 고점 대비",f"{plan.drawdown_pct:+.1f}%")
+        m2.metric("20일 고점 대비",f"{plan.drawdown_pct:+.1f}%")
         m3.metric("전일 IBS",f"{plan.ibs:.2f}")
-        m4.metric("위험순위",("계산 전" if plan.risk_percentile is None else f"하위 {plan.risk_percentile:.1f}%"))
+        m4.metric("10일 저점 반등",("계산 전" if plan.risk_percentile is None else f"{plan.risk_percentile:.1f}%"))
 
         st.markdown("### 📋 오늘 넣을 주문")
         orders=[]
@@ -2289,8 +2273,9 @@ with tab_pulse:
             number=2 if int(pulse_held)>0 else 1
             orders.append(
                 f"{number}) SOXL {plan.breakout_shares}주 돌파매수 — 가격이 ${plan.breakout_price:.2f}에 도달하면 조건부/시장가 매수")
-            orders.append(
-                f"{number+1}) 체결되면 손절매도 — ${plan.stop_price:.2f} (매수가 대비 -{plan.stop_pct:.0f}%)")
+            if plan.stop_price is not None:
+                orders.append(
+                    f"{number+1}) 체결되면 손절매도 — ${plan.stop_price:.2f} (매수가 대비 -{plan.stop_pct:.0f}%)")
             if plan.loc_price is not None:
                 orders.append(
                     f"{number+2}) SOXL {plan.loc_shares}주 LOC 매수 — 종가가 ${plan.loc_price:.2f} 이하일 때")
@@ -2300,12 +2285,12 @@ with tab_pulse:
         if plan.mode=="공격":
             st.success(
                 f"상승추세가 살아 있어 전용자금의 **{plan.weight_pct:.1f}%**를 돌파가격에 주문합니다. "
-                "공격모드에는 급락 LOC 주문을 사용하지 않습니다."
+                "이 후보는 LOC와 장중 손절을 사용하지 않고 다음 거래일 시가에 청산합니다."
             )
         elif plan.mode=="수비":
             st.warning(
-                f"최근 고점에서 크게 하락해 전용자금의 **{plan.weight_pct:.1f}%**만 돌파주문에 사용합니다. "
-                "LOC도 같은 금액으로 별도 주문하므로 두 주문을 동시에 걸 수 있는 현금을 남겨 두세요."
+                f"현재 상태와 위험축소 규칙에 따라 전용자금의 **{plan.weight_pct:.1f}%**만 돌파주문에 사용합니다. "
+                "LOC 추가매수는 사용하지 않습니다."
             )
         else:
             st.info("공격·수비 조건보다 관망 필터가 우선했습니다. 기존 보유분만 시가에 정리하고 신규매수는 하지 않습니다.")
@@ -2313,26 +2298,25 @@ with tab_pulse:
         with st.expander("왜 이 모드와 가격이 나왔나요? · 초보자 설명"):
             st.markdown(
                 f"- 전일 종가: **${plan.close:.2f}**\n"
-                f"- 최근 50거래일 고점: **${plan.peak50:.2f}**\n"
+                f"- 최근 20거래일 고점: **${plan.peak50:.2f}**\n"
                 f"- 고점 대비 하락률: **{plan.drawdown_pct:+.1f}%**\n\n"
-                "고점 대비 30% 이내이면 공격후보, 30% 넘게 하락했으면 수비후보입니다. "
-                "그 뒤 최근 60일 변동성과 전일 종가 위치(IBS)가 과거 최악의 10% 조건인지 확인해, "
-                "해당하면 공격·수비 대신 관망합니다."
+                "전일 IBS와 최근 10일 저점 반등률을 과거 상태표와 비교해 공격·수비·관망을 정합니다. "
+                "그 뒤 전략 누적낙폭, 최근 20일 실현변동성, SOXL의 20일 고점 대비 하락 상태에 따라 비중을 줄입니다."
             )
             if plan.breakout_price is not None:
                 st.markdown(
-                    f"**돌파가격 계산:** 오늘 시가 ${pulse_open:.2f} + "
-                    f"(전일 고가−저가) × {plan.k:.1f} = **${plan.breakout_price:.2f}**"
+                    f"**돌파가격 계산:** 오늘 시가 ${pulse_open:.2f} × 1.0075 = **${plan.breakout_price:.2f}**"
                 )
 
     st.divider()
-    st.markdown("### 📊 복원 후보의 과거 결과")
+    st.markdown("### 📊 선택 프리셋 전진검증 결과")
+    selected_result=CANDIDATE_PRESETS.get(pulse_preset,CANDIDATE_PRESETS["신규 균형형"])
     r1,r2,r3=st.columns(3)
-    r1.metric("과거 CAGR","73.91%")
-    r2.metric("과거 MDD","-34.00%")
-    r3.metric("과거 승률","56.99%")
+    r1.metric("전진검증 CAGR",f"{selected_result['cagr']:.2f}%")
+    r2.metric("전진검증 MDD",f"{selected_result['mdd']:.2f}%")
+    r3.metric("편도 비용 가정","0.12%")
     st.warning(
-        "이 수치는 공개 주문표를 바탕으로 재구성한 후보의 과거 백테스트입니다. 원작의 정확한 비공개 공식이 아니며, "
+        "이 수치는 IBS·10일 저점 반등률을 이용해 독립적으로 발굴한 후보의 과거 전진검증입니다. 원작의 정확한 비공개 공식이 아니며, "
         "과최적화·분봉 손절순서·실제 체결오차 때문에 미래 성과는 크게 낮아질 수 있습니다. "
         "실전에서는 CAGR 30%에서 50%, MDD -45%에서 -60%까지 보수적으로 가정하세요."
     )
