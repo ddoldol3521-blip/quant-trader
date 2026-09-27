@@ -149,6 +149,55 @@ st.markdown(
       display: inline-flex; align-items: center; gap: 5px; min-height: 26px;
   }
   label[data-testid="stWidgetLabel"] > div {display: flex; align-items: center;}
+
+  /* ── 폰 화면 (760px 이하) ─────────────────────────────────────────
+     데스크톱 기준으로만 짜여 있어서 폰에서 이런 일이 났다.
+       · 지표 카드 높이가 100px 로 박혀 있어 숫자가 잘림
+       · st.columns 가 폰에서도 가로로 붙어 글자가 뭉개짐
+       · 표가 화면 밖으로 잘려 옆 칸을 못 봄
+       · 탭 7개가 한 줄에 눌려 글씨가 깨짐
+     주문 화면은 돈이 걸린 곳이라 폰에서도 숫자가 온전히 보여야 한다. */
+  @media (max-width: 760px) {
+      .block-container {padding: 0.6rem 0.75rem 1rem 0.75rem;}
+
+      /* 지표 카드: 높이를 풀고 글자를 키운다. 잘리느니 길어지는 편이 낫다. */
+      [data-testid="stMetric"] {
+          height: auto; min-height: 0; padding: 9px 11px;
+      }
+      [data-testid="stMetricValue"] {font-size: 1.15rem; line-height: 1.25;}
+      [data-testid="stMetricLabel"] p {font-size: 0.72rem;}
+
+      /* 가로 배치를 세로로 푼다. 단, 2칸짜리(고르기+버튼)는 그대로 둬야
+         버튼이 선택상자 아래로 떨어지지 않는다. */
+      [data-testid="stHorizontalBlock"] {flex-wrap: wrap; gap: 0.45rem;}
+      [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+          min-width: 46% !important;
+      }
+
+      /* 표는 가로로 밀어서 볼 수 있게. 잘라 버리면 값을 못 본다. */
+      [data-testid="stDataFrame"], .stDataFrame {overflow-x: auto;}
+
+      /* 탭: 줄바꿈 허용 + 좌우 스크롤 */
+      [role="tablist"] {overflow-x: auto; flex-wrap: nowrap; gap: 1px;}
+      [role="tab"] {padding: 8px 10px !important; white-space: nowrap;}
+      [role="tab"] p {font-size: 0.82rem !important;}
+
+      /* 제목·본문을 폰 폭에 맞춰 한 단계 줄인다 */
+      .qm-hero {padding: 0.9rem 1rem;}
+      .qm-hero h1 {font-size: 1.32rem;}
+      .qm-hero p {font-size: 0.86rem;}
+      h1 {font-size: 1.3rem;}
+
+      /* 버튼은 손가락으로 누르는 크기로 */
+      div[data-testid="stButton"] button {min-height: 2.9rem; width: 100%;}
+  }
+
+  /* 아주 좁은 폰 (400px 이하) — 두 칸도 세로로 편다 */
+  @media (max-width: 400px) {
+      [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+          min-width: 100% !important;
+      }
+  }
 </style>
 """,
     unsafe_allow_html=True,
