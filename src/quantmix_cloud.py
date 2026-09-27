@@ -12,6 +12,7 @@ import html
 import json
 import math
 import os
+import re
 import subprocess
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -23,6 +24,26 @@ from cryptography.fernet import Fernet
 ROOT = Path(__file__).resolve().parent.parent
 STATE_BRANCH = "quantmix-notify-state"
 STATE_FILE = "outbox.enc"
+
+
+def state_file_for(person_id: str | None) -> str:
+    """그 사람 전용 발송함 파일 이름.
+
+    사람마다 **따로** 둬야 한다. 한 파일을 같이 쓰면 A 가 보낸 주문 수량이
+    B 의 '이미 안내한 수량' 으로 섞여 들어간다(merged_guides 참고). 그러면
+    B 는 자기 계좌에 맞지 않는 수량을 자기 기록으로 갖게 된다. 돈이 틀어진다.
+
+    첫 사람은 이름 없이 기존 파일을 그대로 쓴다. 이미 쌓인 발송 기록을
+    옮기지 않아도 되고, 옮기다 잃을 위험도 없다.
+    """
+    if not person_id:
+        return STATE_FILE
+    # 영문·숫자·-·_ 만. str.isalnum() 은 한글도 참이라 쓰면 안 된다 —
+    # 파일 이름이 깃 API 경로에 들어가므로 인코딩이 얽히면 엉뚱한 파일을 본다.
+    text = str(person_id)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", text):
+        raise CloudError("INVALID_PERSON_ID")
+    return f"outbox-{text}.enc"
 
 
 class CloudError(RuntimeError):
@@ -76,6 +97,62 @@ def validate_profile(profile: dict) -> dict:
     except (ValueError, TypeError, KeyError):
         raise CloudError("INVALID_PROFILE") from None
     return profile
+
+
+def load_people() -> list[dict]:
+    """알림을 받을 사람들. [{id, label, profile, chat_id}, ...]
+
+    두 가지 방식을 다 받는다.
+
+      QUANTMIX_PEOPLE_JSON   여러 명. [{"id","label","chat_id","profile":{...}}, ...]
+      QUANTMIX_PROFILE_JSON  한 명 (예전 방식). 그대로 두면 지금까지처럼 돈다.
+
+    예전 방식을 남겨 두는 이유: 이미 잘 돌고 있는 알림을 새 형식으로 옮기다
+    하루라도 빠뜨리면 그날 주문을 못 받는다. 새 사람은 새 형식으로 추가하고,
+    기존 한 명은 건드리지 않는다.
+
+    id 는 발송함 파일 이름이 된다. 한 번 정하면 바꾸지 않는다 — 바꾸면
+    빈 발송함에서 새로 시작하게 되어 '이미 보낸 주문' 기록을 잃는다.
+    """
+    raw = os.environ.get("QUANTMIX_PEOPLE_JSON", "").strip()
+    if not raw:
+        # 예전 방식: 사람 하나, 기본 발송함, 기본 채팅방.
+        if not os.environ.get("QUANTMIX_PROFILE_JSON"):
+            raise CloudError("NO_PROFILE_CONFIGURED")
+        return [{"id": None, "label": "",
+                 "profile": validate_profile(json.loads(os.environ["QUANTMIX_PROFILE_JSON"])),
+                 "chat_id": None}]
+    try:
+        rows = json.loads(raw)
+    except ValueError:
+        raise CloudError("INVALID_PEOPLE_JSON") from None
+    if not isinstance(rows, list) or not rows:
+        raise CloudError("INVALID_PEOPLE_JSON")
+
+    people, seen_ids, seen_chats = [], set(), set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise CloudError("INVALID_PEOPLE_JSON")
+        person_id = row.get("id")
+        chat = str(row.get("chat_id", "")).strip()
+        if not chat:
+            raise CloudError("PERSON_CHAT_ID_REQUIRED")
+        # 같은 방으로 두 번 보내면 받는 사람이 어느 게 자기 것인지 모른다.
+        # 같은 id 를 두 번 쓰면 발송함을 공유하게 되어 수량이 섞인다.
+        if person_id in seen_ids:
+            raise CloudError("DUPLICATE_PERSON_ID")
+        if chat in seen_chats:
+            raise CloudError("DUPLICATE_CHAT_ID")
+        seen_ids.add(person_id)
+        seen_chats.add(chat)
+        state_file_for(person_id)          # 여기서 이름이 안전한지 먼저 확인한다
+        people.append({
+            "id": person_id,
+            "label": str(row.get("label", "") or ""),
+            "profile": validate_profile(row.get("profile", {})),
+            "chat_id": chat,
+        })
+    return people
 
 
 def trading_context(now: datetime, *, session_date: date | None = None):
@@ -140,10 +217,12 @@ def github_token() -> str:
 
 
 class GitHubStore:
-    def __init__(self, repo: str, token: str, key: str):
+    def __init__(self, repo: str, token: str, key: str, state_file: str = STATE_FILE):
         if len(repo.split("/")) != 2 or any(x in repo for x in ("..", "?", "#")):
             raise CloudError("INVALID_REPOSITORY")
         self.repo = repo
+        # 사람마다 다른 파일. state_file_for() 가 이름을 정한다.
+        self.state_file = state_file
         self.headers = {"Authorization": f"Bearer {token}",
                         "Accept": "application/vnd.github+json",
                         "X-GitHub-Api-Version": "2022-11-28"}
@@ -160,7 +239,7 @@ class GitHubStore:
         return response.json() if response.content else {}
 
     def read(self):
-        obj = self.api("GET", f"contents/{STATE_FILE}?ref={STATE_BRANCH}")
+        obj = self.api("GET", f"contents/{self.state_file}?ref={STATE_BRANCH}")
         try:
             raw = self.cipher.decrypt(base64.b64decode(obj["content"]))
             state = json.loads(raw)
@@ -177,7 +256,7 @@ class GitHubStore:
                 "content": base64.b64encode(encrypted).decode()}
         if sha:
             body["sha"] = sha  # optimistic concurrency, never overwrite a newer outbox
-        result = self.api("PUT", f"contents/{STATE_FILE}", body=body)
+        result = self.api("PUT", f"contents/{self.state_file}", body=body)
         return result["content"]["sha"]
 
 
@@ -259,8 +338,14 @@ def deliver_once(store, state, sha, day, message, buy_qty, send, *, slot=None):
     return "sent"
 
 
-def send_cloud_telegram(message: str) -> int:
-    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+def send_cloud_telegram(message: str, chat_id: str | None = None) -> int:
+    """텔레그램으로 보낸다. chat_id 를 주면 그 방으로, 없으면 기본 방으로.
+
+    사람마다 방이 달라야 한다. 한 방에 둘 다 보내면 상대방 계좌 기준 수량을
+    자기 것으로 오해해서 따라 넣을 수 있다.
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat:
         raise CloudError("TELEGRAM_NOT_CONFIGURED")
     try:
