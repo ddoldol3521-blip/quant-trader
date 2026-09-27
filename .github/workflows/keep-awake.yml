@@ -1,0 +1,59 @@
+# 앱이 잠들지 않게 주기적으로 깨운다.
+#
+# Streamlit Community Cloud(무료)는 한동안 아무도 안 들어오면 앱을 재운다.
+# 그 상태에서 열면 "Zzzz - This app has gone to sleep" 가 뜨고, 깨우는 데
+# 30~60초가 걸린다. 그 사이 화면이 비거나 오류처럼 보인다.
+# 실제로 "가끔 주문 정보가 안 나온다" 던 원인이 이것이었다.
+#
+# 공개 저장소의 Actions 는 무료 무제한이라 비용이 들지 않는다.
+#
+# 자주 부를 이유는 없다. 하루 몇 번이면 재우는 타이머가 계속 초기화된다.
+# 남의 무료 자원이므로 필요한 만큼만 부른다.
+name: Keep app awake
+
+on:
+  schedule:
+    # KST 기준 08:00 / 14:00 / 20:00 / 02:00 (UTC 23,05,11,17시)
+    # 미국장 주문 시각(한국 새벽 4:50) 전에 한 번은 깨어 있게 배치했다.
+    - cron: "0 23,5,11,17 * * *"
+  workflow_dispatch:
+
+# 여러 번 겹쳐 돌 필요가 없다.
+concurrency:
+  group: quantmix-keep-awake
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 앱 깨우기
+        env:
+          APP_URL: https://quant-trader-f6mdh8pvlgj6anuzssdzex.streamlit.app
+        run: |
+          # 잠든 앱은 첫 요청에 303 을 주고 뒤에서 깨어난다. 그래서
+          # 한 번 부르고 기다렸다가 다시 불러 실제로 떴는지 확인한다.
+          echo "1차 호출"
+          curl -sS -o /dev/null -w "  상태 %{http_code} · %{time_total}초\n" \
+               -L --max-time 60 "$APP_URL" || echo "  1차 실패 (계속 진행)"
+
+          sleep 45
+
+          echo "2차 확인"
+          code=$(curl -sS -o /tmp/page.html -w "%{http_code}" \
+                      -L --max-time 60 "$APP_URL" || echo "000")
+          echo "  상태 $code"
+
+          if grep -qi "gone to sleep" /tmp/page.html 2>/dev/null; then
+            echo "  아직 자고 있음 - 다음 회차에 다시 시도한다"
+            exit 0
+          fi
+
+          # 깨우기는 '되면 좋은 것' 이다. 실패해도 워크플로를 빨갛게 만들지 않는다.
+          # 진짜 문제(주문 계산 실패)는 jongsa-daily.yml 이 알려준다.
+          if [ "$code" = "200" ]; then
+            echo "  깨어 있음"
+          else
+            echo "  응답이 200 이 아니다 - 기록만 남긴다"
+          fi
