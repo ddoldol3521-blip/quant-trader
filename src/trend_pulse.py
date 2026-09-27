@@ -32,6 +32,15 @@ class PulsePlan:
     next_open_sell: bool
 
 
+CANDIDATE_PRESETS = {
+    "신규 수익형": {"cagr": 68.06, "mdd": -33.51, "vol_target": .325, "market_dd_scale": 1.0, "ma20_scale": None},
+    "신규 기본형": {"cagr": 66.26, "mdd": -32.73, "vol_target": .30, "market_dd_scale": 1.0, "ma20_scale": None},
+    "신규 균형형": {"cagr": 63.49, "mdd": -29.22, "vol_target": .30, "market_dd_scale": .75, "ma20_scale": None},
+    "신규 방어형": {"cagr": 61.85, "mdd": -27.31, "vol_target": .30, "market_dd_scale": .50, "ma20_scale": None},
+    "신규 초방어형": {"cagr": 58.09, "mdd": -24.86, "vol_target": .30, "market_dd_scale": .25, "ma20_scale": .75},
+}
+
+
 def _clean(data: pd.DataFrame) -> pd.DataFrame:
     rename={c:str(c).lower().replace(" ","_") for c in data.columns}
     x=data.rename(columns=rename).copy()
@@ -144,3 +153,78 @@ def make_plan(data: pd.DataFrame,today_open: float,capital: float,
     return PulsePlan(base,reason,float(last.close),peak50,dd*100,ibs,vol60,percentile,
                      weight*100,k,trigger,shares(amount,trigger),stop_pct*100,stop,
                      loc,shares(amount,loc) if loc else 0,True)
+
+
+def _candidate_features(x: pd.DataFrame) -> pd.DataFrame:
+    ibs=((x.close-x.low)/(x.high-x.low).replace(0,np.nan)).shift(1)
+    low10=x.low.rolling(10).min().shift(1)
+    rebound=x.close.shift(1)/low10-1
+    return pd.DataFrame({"ibs":ibs,"rebound10":rebound},index=x.index)
+
+
+def _candidate_map(x: pd.DataFrame, cutoff: pd.Timestamp):
+    f=_candidate_features(x);train=x.index<=cutoff
+    _,ei=pd.qcut(f.loc[train,"ibs"].dropna(),3,retbins=True,duplicates="drop")
+    _,er=pd.qcut(f.loc[train,"rebound10"].dropna(),3,retbins=True,duplicates="drop")
+    ei[0]=er[0]=-np.inf;ei[-1]=er[-1]=np.inf
+    cell=pd.cut(f.ibs,ei,labels=False,include_lowest=True)*3+pd.cut(f.rebound10,er,labels=False,include_lowest=True)
+    trigger=x.open*1.0075;entered=x.high>=trigger
+    outcome=x.open.shift(-1)*(1-.0012)/(trigger*(1+.0012))-1
+    ok=train&entered&outcome.notna()&cell.notna()
+    g=pd.DataFrame({"cell":cell[ok],"r":outcome[ok]}).groupby("cell").r.agg(["mean","count"])
+    overall=float(outcome[ok].mean());g["score"]=(g["mean"]*g["count"]+overall*25)/(g["count"]+25)
+    order=list(g.score.sort_values(ascending=False).index)
+    return cell,set(order[:max(1,round(len(order)*.4))]),set(order[-max(1,round(len(order)*.2)):]),outcome,entered
+
+
+def _walkforward_returns(x: pd.DataFrame) -> pd.Series:
+    pieces=[]
+    for year in range(max(2014,int(x.index[0].year)+1),int(x.index[-1].year)+1):
+        cell,attack,watch,outcome,entered=_candidate_map(x,pd.Timestamp(f"{year-1}-12-31"))
+        weight=pd.Series(.35,index=x.index);weight[cell.isin(attack)]=1.;weight[cell.isin(watch)]=0
+        daily=(weight*outcome).where(entered,0).fillna(0)
+        pieces.append(daily.loc[f"{year}-01-01":f"{year}-12-31"])
+    return pd.concat(pieces).sort_index() if pieces else pd.Series(dtype=float)
+
+
+def _next_risk_scale(daily: pd.Series,vol_target: float) -> float:
+    equity=1.;curve=[];realized=[]
+    for value in daily.fillna(0).to_numpy():
+        curve.append(equity);scale=1.;peak=max(curve)
+        if equity/peak-1<=-.15:scale*=.75
+        if len(realized)>=20:
+            vol=float(np.std(realized[-20:],ddof=1)*np.sqrt(252))
+            if vol>0:scale*=min(1.,vol_target/vol)
+        ret=scale*float(value);realized.append(ret);equity*=1+ret
+    scale=1.;peak=max(curve+[equity])
+    if equity/peak-1<=-.15:scale*=.75
+    if len(realized)>=20:
+        vol=float(np.std(realized[-20:],ddof=1)*np.sqrt(252))
+        if vol>0:scale*=min(1.,vol_target/vol)
+    return scale
+
+
+def make_candidate_plan(data: pd.DataFrame,today_open: float,capital: float,
+                        preset_name: str="신규 균형형",whole_shares: bool=True) -> PulsePlan:
+    """검증된 IBS+10일 반등 후보의 오늘 주문표."""
+    x=_clean(data);preset=CANDIDATE_PRESETS.get(preset_name,CANDIDATE_PRESETS["신규 균형형"])
+    if today_open<=0 or capital<=0:raise ValueError("오늘 시가와 전략자금은 0보다 커야 합니다.")
+    last=x.iloc[-1];cutoff=pd.Timestamp(f"{int(x.index[-1].year)-1}-12-31")
+    today=pd.DataFrame({"open":[today_open],"high":[today_open],"low":[today_open],"close":[today_open]},index=[x.index[-1]+pd.Timedelta(days=1)])
+    calc=pd.concat([x,today]);cell,attack,watch,_,_=_candidate_map(calc,cutoff);current=cell.iloc[-1]
+    if current in attack:mode="공격";base_weight=1.;reason="전일 IBS와 10일 저점 반등 조합이 과거 상위 상태"
+    elif current in watch:mode="관망";base_weight=0.;reason="전일 IBS와 10일 저점 반등 조합이 과거 하위 상태"
+    else:mode="수비";base_weight=.35;reason="전일 IBS와 10일 저점 반등 조합이 중간 상태"
+    risk_scale=_next_risk_scale(_walkforward_returns(x),preset["vol_target"])
+    market_scale=1.;peak20=float(x.high.tail(20).max());market_dd=float(last.close/peak20-1)
+    if market_dd<=-.20:market_scale=float(preset["market_dd_scale"])
+    ma20=float(x.close.tail(20).mean())
+    if preset["ma20_scale"] is not None and last.close<ma20:market_scale=float(preset["ma20_scale"])
+    weight=base_weight*risk_scale*market_scale;trigger=today_open*1.0075
+    shares=int(np.floor(capital*weight/trigger))
+    ibs=float((last.close-last.low)/(last.high-last.low)) if last.high>last.low else .5
+    rebound=float(last.close/x.low.tail(10).min()-1)
+    detail=f"{reason} · 위험축소 {risk_scale*100:.0f}% · 시장축소 {market_scale*100:.0f}%"
+    return PulsePlan(mode,detail,float(last.close),peak20,market_dd*100,ibs,
+                     float(x.close.pct_change().tail(60).std()*100),rebound*100,weight*100,
+                     None,trigger,shares,None,None,None,0,True)
