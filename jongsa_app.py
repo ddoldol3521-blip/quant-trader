@@ -236,6 +236,29 @@ st.markdown(
       .qm-m-foot {
           margin-top: 0.55rem; font-size: 0.72rem; opacity: 0.65; line-height: 1.35;
       }
+
+      /* 주문 카드를 탭 바로 아래로 끌어올린다.
+         계산 순서상 카드는 화면 한참 아래에서 만들어진다(설정·현황 다음).
+         실측 2,658px — 폰에서 세 화면을 내려야 나왔다. 그리는 순서를 바꾸면
+         계산이 꼬이므로, 그리는 위치는 그대로 두고 보이는 자리만 옮긴다.
+         주문은 이 앱에서 제일 먼저 봐야 하는 것이다.
+
+         탭 안의 요소들을 flex 로 세우고, 카드를 품은 칸만 맨 앞으로 보낸다.
+         :has() 를 쓰는 이유 — 그 칸은 스트림릿이 만든 것이라 우리가 class 를
+         붙일 수 없다. 안에 무엇이 들었는지로 골라낸다. */
+      [data-testid="stTabPanel"] > [data-testid="stVerticalBlock"] {
+          display: flex; flex-direction: column;
+      }
+      [data-testid="stTabPanel"] > [data-testid="stVerticalBlock"]
+          > [data-testid="stElementContainer"]:has(.qm-m-card) {order: -2;}
+      /* '눌러서 복사' 라벨과, 그 **바로 다음**에 오는 복사용 코드 블록도
+         같이 따라 올라와야 짝이 맞는다. 코드 블록에는 class 를 못 붙이므로
+         형제 선택자로 집는다. */
+      [data-testid="stTabPanel"] > [data-testid="stVerticalBlock"]
+          > [data-testid="stElementContainer"]:has(.qm-m-copy) {order: -1;}
+      [data-testid="stTabPanel"] > [data-testid="stVerticalBlock"]
+          > [data-testid="stElementContainer"]:has(.qm-m-copy)
+          + [data-testid="stElementContainer"] {order: -1;}
       /* 요약 아래 복사용 블록은 한 줄씩 또렷하게 */
       .qm-mobile-only + div [data-testid="stCode"] {margin-top: -0.3rem;}
   }
@@ -1320,10 +1343,15 @@ if ready:
         unsafe_allow_html=True,
     )
     if _lines:
-        with st.container():
-            st.markdown('<div class="qm-mobile-only">', unsafe_allow_html=True)
-            st.code(_copy, language=None)
-            st.markdown('</div>', unsafe_allow_html=True)
+        # 복사용 블록. 증권사 앱에 손으로 옮겨 적는 수고를 덜어준다.
+        # qm-m-copy 표시로 카드 바로 아래에 붙게 한다(CSS order).
+        st.markdown(
+            '<div class="qm-mobile-only qm-m-copy" '
+            'style="font-size:0.7rem;opacity:0.6;margin:0 0 -0.35rem 2px;">'
+            '눌러서 복사</div>',
+            unsafe_allow_html=True,
+        )
+        st.code(_copy, language=None)
 
     a1, a2 = st.columns(2)
     with a1:
