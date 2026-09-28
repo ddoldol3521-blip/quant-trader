@@ -198,6 +198,47 @@ st.markdown(
           min-width: 100% !important;
       }
   }
+
+  /* ── 폰 전용 요약 ────────────────────────────────────────────────
+     폰에서 진짜 필요한 것은 '몇 주 · 얼마' 두 줄인데, 그걸 보려고
+     설명글 1,500자를 지나야 했다. 같은 내용을 맨 위에 짧게 한 번 더
+     보여준다. 아래 자세한 화면은 그대로 둔다 — 없애면 PC 가 불편해진다. */
+  .qm-mobile-only {display: none;}
+  @media (max-width: 760px) {
+      .qm-mobile-only {display: block;}
+
+      /* 폰에서는 설명을 접는다. 처음 한 번 읽으면 그만인 글이 매번
+         주문 위를 덮고 있으면 그게 곧 '쓰기 불편한 앱' 이 된다. */
+      .qm-desktop-only {display: none;}
+
+      .qm-m-card {
+          border: 1px solid #2F6BD8; border-radius: 14px;
+          background: linear-gradient(150deg, #16233A, #17303F);
+          padding: 0.8rem 0.9rem; margin: 0.2rem 0 0.5rem 0;
+      }
+      .qm-m-head {
+          font-size: 0.78rem; font-weight: 700; color: #8FC0FF;
+          letter-spacing: 0.01em; margin-bottom: 0.5rem;
+      }
+      .qm-m-row {
+          display: flex; align-items: baseline; gap: 0.5rem;
+          padding: 0.42rem 0; border-top: 1px solid rgba(255,255,255,0.07);
+      }
+      .qm-m-row:first-of-type {border-top: 0;}
+      .qm-m-kind {
+          font-size: 0.72rem; font-weight: 700; color: #FF9E9E;
+          background: rgba(255,90,90,0.12); border-radius: 6px;
+          padding: 2px 7px; white-space: nowrap;
+      }
+      .qm-m-kind.buy {color: #8BE6A8; background: rgba(60,220,130,0.12);}
+      .qm-m-row b {font-size: 1.18rem; color: #F4F8FF;}
+      .qm-m-px {margin-left: auto; font-size: 1.05rem; color: #CFE2FF; font-weight: 650;}
+      .qm-m-foot {
+          margin-top: 0.55rem; font-size: 0.72rem; opacity: 0.65; line-height: 1.35;
+      }
+      /* 요약 아래 복사용 블록은 한 줄씩 또렷하게 */
+      .qm-mobile-only + div [data-testid="stCode"] {margin-top: -0.3rem;}
+  }
 </style>
 """,
     unsafe_allow_html=True,
@@ -751,10 +792,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 if is_shared_server():
+    # 폰에서는 접는다. 한 번 읽으면 그만인 글이 매번 주문 위를 덮으면
+    # 그게 곧 '쓰기 불편한 앱' 이 된다. 다만 면책 문구는 없애지 않는다.
+    st.markdown('<div class="qm-desktop-only">', unsafe_allow_html=True)
     st.caption(
         "SOXL 분할매매 계산기입니다. **투자 자문이 아니고 수익을 보장하지 않습니다.** "
         "설정은 사람마다 따로 유지됩니다 — **지금 주소를 즐겨찾기 해두면** 다음에 열 때도 "
         "이 설정 그대로 뜹니다 (주소창을 보면 설정값이 붙어 있습니다)."
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="qm-mobile-only" style="font-size:0.72rem;opacity:0.6;'
+        'margin:-0.2rem 0 0.4rem 0;">투자 자문이 아니며 수익을 보장하지 않습니다. '
+        '이 주소를 즐겨찾기 해두면 설정이 유지됩니다.</div>',
+        unsafe_allow_html=True,
     )
 
 tab_home, tab_pulse, tab_compare, tab_year, tab_grid, tab_help, tab_notify = st.tabs(
@@ -769,9 +820,10 @@ ready = True
 with tab_home:
     # ============================================================ 설정 (맨 위)
 
+    # 3단계 안내는 처음 한 번만 필요하다. 폰에서는 접는다.
     st.markdown(
         """
-<div class="qm-steps">
+<div class="qm-steps qm-desktop-only">
   <div class="qm-step"><b>1단계 · 전략 고르기</b><span>처음이면 <strong>균형형</strong>을 선택하세요.</span></div>
   <div class="qm-step"><b>2단계 · 내 정보 입력</b><span>투자금과 실제로 시작한 날짜를 적으세요.</span></div>
   <div class="qm-step"><b>3단계 · 주문 넣기</b><span>아래에 나온 매수·매도 주문을 그대로 입력하세요.</span></div>
@@ -825,9 +877,12 @@ with tab_home:
                 # 공유 서버는 파일에 저장하지 않으므로 재실행 전에 주소에 먼저 쓴다.
                 cfg_to_url(cfg, st.session_state.flows)
                 st.rerun()
+        # 전략 설명은 고를 때만 필요하다. 폰에서는 접는다.
+        st.markdown('<div class="qm-desktop-only">', unsafe_allow_html=True)
         st.markdown(f"**쉽게 말하면:** {PRESETS[quick_preset]['설명']}")
         st.caption(preset_result_caption(PRESETS[quick_preset]))
         st.caption("SOXL 약 15.5년 · 약 29.5만 설정 조합 · 누적 31만 회 이상 시뮬레이션에서 선별")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="qm-section-title">내 투자 정보 입력</div>', unsafe_allow_html=True)
     # 같은 단계의 입력칸은 같은 폭으로 보여야 우선순위가 동일하게 느껴진다.
@@ -1181,11 +1236,14 @@ if ready:
             + (f" 최대 보유기간 {stop_days}거래일이 아직 지나지 않아 기간종료 매도가 없을 수 있습니다."
                if len(log) <= int(stop_days) else "")
         )
+    # 제목과 안내는 PC 에서만. 폰은 아래 요약 카드가 같은 일을 한다.
+    st.markdown('<div class="qm-desktop-only">', unsafe_allow_html=True)
     st.markdown("## 오늘 증권사 앱에 입력할 주문")
     st.info(
         f"**아래의 빨간색 ‘팔 주문’과 초록색 ‘살 주문’만 확인하면 됩니다.** "
         f"{price_date:%Y-%m-%d} 종가(\\${price:,.2f})로 계산했으며, 오늘 종가를 미리 알 필요는 없습니다."
     )
+    st.markdown('</div>', unsafe_allow_html=True)
 
     # 오늘 종가를 모르는 상태에서 주문을 짠다 (원문 요령: 매수 LOC = 최저 목표가 - 0.01)
     plan_cfg = {**cfg, "_last_close": price}
@@ -1220,6 +1278,52 @@ if ready:
         save_order_guides(st.session_state.order_guides)
         cfg_to_url(cfg, st.session_state.flows)
         st.rerun()
+
+    # ── 폰용 요약 ────────────────────────────────────────────────────
+    #
+    # 폰에서 열면 진짜 필요한 두 줄을 보려고 설명글 1,500자를 지나야 했다.
+    # 증권사 앱에 넣을 값은 '몇 주 · 얼마' 뿐인데 그게 제일 아래 있었다.
+    #
+    # 그래서 같은 내용을 맨 위에 한 번 더, 아주 짧게 보여준다. 아래 자세한
+    # 화면은 그대로 둔다 — 없애면 PC 에서 쓰던 사람이 불편해진다.
+    # CSS 로 폰에서만 보이게 하고, PC 에서는 숨긴다.
+    def _order_lines():
+        lines = []
+        for s in forced:
+            alt = s.get("대체지정가")
+            lines.append(("LOC 매도" if alt else "MOC 매도", s["qty"],
+                          alt if alt else None))
+        for s in pending:
+            lines.append(("LOC 매도", s["qty"], s["target_price"]))
+        if buy.get("type") and buy.get("qty"):
+            lines.append(("LOC 매수", buy["qty"], buy.get("limit")))
+        return lines
+
+    _lines = _order_lines()
+    _copy = "\n".join(
+        f"{kind} | {qty:,.0f}주" + (f" | ${px:,.2f}" if px else " | 시장가")
+        for kind, qty, px in _lines
+    )
+    _cards = "".join(
+        f'<div class="qm-m-row"><span class="qm-m-kind{"" if "매수" not in kind else " buy"}">{kind}</span>'
+        f'<b>{qty:,.0f}주</b>'
+        f'<span class="qm-m-px">{"$%s" % f"{px:,.2f}" if px else "시장가"}</span></div>'
+        for kind, qty, px in _lines
+    ) or '<div class="qm-m-row"><span>오늘은 넣을 주문이 없습니다</span></div>'
+
+    st.markdown(
+        f'<div class="qm-mobile-only qm-m-card">'
+        f'<div class="qm-m-head">오늘 넣을 주문 · {order_trade_date:%m/%d}</div>'
+        f'{_cards}'
+        f'<div class="qm-m-foot">기준 {price_date:%m/%d} 종가 ${price:,.2f} · '
+        f'한국 새벽 4:50까지</div></div>',
+        unsafe_allow_html=True,
+    )
+    if _lines:
+        with st.container():
+            st.markdown('<div class="qm-mobile-only">', unsafe_allow_html=True)
+            st.code(_copy, language=None)
+            st.markdown('</div>', unsafe_allow_html=True)
 
     a1, a2 = st.columns(2)
     with a1:
