@@ -110,20 +110,32 @@ must(people[0]["profile"]["config"]["initial_cash"] == 55152
      and people[1]["profile"]["config"]["initial_cash"] == 10000,
      "각자 자기 투자금을 갖는다")
 
-print("\n[겹치면 거부]")
+print("\n[겹치면 앞의 것만 쓰고 건너뛴다]")
+# 예전에는 거절했다. 앱에서 직접 등록하는 길이 생긴 뒤로는, 한 사람이
+# 겹쳤다는 이유로 **모두가** 그날 주문을 못 받게 된다. 그게 더 나쁘다.
+# 그래서 건너뛴다. 중요한 것은 '거절' 이 아니라 **섞이지 않는 것** 이다.
 same_chat = [dict(two[0]), dict(two[1], chat_id="111")]
 with with_env(QUANTMIX_PEOPLE_JSON=json.dumps(same_chat), QUANTMIX_PROFILE_JSON=None):
-    try:
-        load_people(); must(False, "같은 방을 두 번 쓰면 거부한다", "통과시켜 버림")
-    except CloudError as e:
-        must(str(e) == "DUPLICATE_CHAT_ID", "같은 방을 두 번 쓰면 거부한다", str(e))
+    got = load_people()
+must(len(got) == 1, "같은 방이 겹치면 한 번만 보낸다", f"{len(got)}명")
+must(got[0]["id"] == "jg", "앞의 것이 남는다", got[0]["id"])
 
 same_id = [dict(two[0]), dict(two[1], id="jg")]
 with with_env(QUANTMIX_PEOPLE_JSON=json.dumps(same_id), QUANTMIX_PROFILE_JSON=None):
-    try:
-        load_people(); must(False, "같은 id 를 두 번 쓰면 거부한다", "통과시켜 버림")
-    except CloudError as e:
-        must(str(e) == "DUPLICATE_PERSON_ID", "같은 id 를 두 번 쓰면 거부한다", str(e))
+    got = load_people()
+must(len(got) == 1, "같은 이름이 겹치면 한 명만 남는다", f"{len(got)}명")
+must(got[0]["chat_id"] == "111", "앞의 것이 남는다 (발송함을 공유하지 않는다)", got[0]["chat_id"])
+
+# 핵심: 끝까지 살아남은 사람들은 방도 발송함도 절대 안 겹친다
+print("\n[끝까지 섞이지 않는다]")
+messy = [dict(two[0]), dict(two[1]),
+         dict(two[0], label="중복1"), dict(two[1], id="gf2")]
+with with_env(QUANTMIX_PEOPLE_JSON=json.dumps(messy), QUANTMIX_PROFILE_JSON=None):
+    got = load_people()
+chats = [p["chat_id"] for p in got]
+files = [state_file_for(p["id"]) for p in got]
+must(len(chats) == len(set(chats)), "방이 하나도 안 겹친다", ", ".join(chats))
+must(len(files) == len(set(files)), "발송함이 하나도 안 겹친다", ", ".join(files))
 
 no_chat = [{"id": "x", "profile": sample_profile(1000, "2026-01-02")}]
 with with_env(QUANTMIX_PEOPLE_JSON=json.dumps(no_chat), QUANTMIX_PROFILE_JSON=None):

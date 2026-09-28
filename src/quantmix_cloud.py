@@ -114,21 +114,39 @@ def load_people() -> list[dict]:
     id 는 발송함 파일 이름이 된다. 한 번 정하면 바꾸지 않는다 — 바꾸면
     빈 발송함에서 새로 시작하게 되어 '이미 보낸 주문' 기록을 잃는다.
     """
+    rows = []
     raw = os.environ.get("QUANTMIX_PEOPLE_JSON", "").strip()
-    if not raw:
+    if raw:
+        try:
+            rows = json.loads(raw)
+        except ValueError:
+            raise CloudError("INVALID_PEOPLE_JSON") from None
+        if not isinstance(rows, list):
+            raise CloudError("INVALID_PEOPLE_JSON")
+        rows = list(rows)
+
+    # 앱에서 직접 등록한 사람들. 관리자가 손으로 옮기지 않아도 된다.
+    # 명부를 못 읽어도 위 목록은 보내야 한다 — 한쪽 고장으로 전부 멈추면 안 된다.
+    if os.environ.get("QUANTMIX_REPOSITORY") and os.environ.get("GH_TOKEN") \
+            and os.environ.get("QUANTMIX_STATE_KEY"):
+        try:
+            from src.quantmix_registry import registry_people
+            rows += registry_people(os.environ["QUANTMIX_REPOSITORY"],
+                                    os.environ["GH_TOKEN"],
+                                    os.environ["QUANTMIX_STATE_KEY"])
+        except CloudError as error:
+            print(f"REGISTRY_UNAVAILABLE: {error}")
+
+    if not rows:
         # 예전 방식: 사람 하나, 기본 발송함, 기본 채팅방.
         if not os.environ.get("QUANTMIX_PROFILE_JSON"):
             raise CloudError("NO_PROFILE_CONFIGURED")
         return [{"id": None, "label": "",
                  "profile": validate_profile(json.loads(os.environ["QUANTMIX_PROFILE_JSON"])),
                  "chat_id": None}]
-    try:
-        rows = json.loads(raw)
-    except ValueError:
-        raise CloudError("INVALID_PEOPLE_JSON") from None
-    if not isinstance(rows, list) or not rows:
-        raise CloudError("INVALID_PEOPLE_JSON")
 
+    # 앱 등록과 손으로 넣은 목록에 같은 사람이 있으면, 손으로 넣은 쪽이 이긴다.
+    # 관리자가 일부러 적어 둔 것을 앱이 덮어쓰면 안 된다.
     people, seen_ids, seen_chats = [], set(), set()
     for row in rows:
         if not isinstance(row, dict):
@@ -139,10 +157,13 @@ def load_people() -> list[dict]:
             raise CloudError("PERSON_CHAT_ID_REQUIRED")
         # 같은 방으로 두 번 보내면 받는 사람이 어느 게 자기 것인지 모른다.
         # 같은 id 를 두 번 쓰면 발송함을 공유하게 되어 수량이 섞인다.
-        if person_id in seen_ids:
-            raise CloudError("DUPLICATE_PERSON_ID")
-        if chat in seen_chats:
-            raise CloudError("DUPLICATE_CHAT_ID")
+        #
+        # 겹치면 **건너뛴다.** 앞의 것(손으로 넣은 목록)이 이긴다.
+        # 예전에는 거절했는데, 앱 등록이 생긴 뒤로는 한 사람이 겹쳤다는
+        # 이유로 **모두가** 그날 주문을 못 받게 된다. 그건 더 나쁘다.
+        if person_id in seen_ids or chat in seen_chats:
+            print(f"SKIP_DUPLICATE: {person_id or 'primary'}")
+            continue
         seen_ids.add(person_id)
         seen_chats.add(chat)
         state_file_for(person_id)          # 여기서 이름이 안전한지 먼저 확인한다

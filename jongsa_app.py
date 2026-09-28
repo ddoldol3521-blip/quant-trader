@@ -2143,7 +2143,22 @@ if is_shared_server():
         # 공유 서버에서는 봇 토큰을 받지 않는다. 저장할 곳이 없기도 하고,
         # 토큰은 봇의 비밀번호라 남의 것을 맡으면 안 된다.
         # 대신 신청서를 글자로 만들어 주고, 등록은 관리자가 한다.
+        from src.quantmix_cloud import CloudError
+        from src.quantmix_registry import MAX_PEOPLE, add_person, remove_person
         from src.quantmix_signup import build_signup, check_chat_id, check_person_id, signup_text
+
+        # 앱이 직접 등록하려면 저장소에 쓸 수 있어야 한다. Streamlit Secrets 에
+        # 넣어 두면 화면을 보는 사람에게는 노출되지 않는다.
+        # 없으면 등록이 꺼지고, 신청서를 복사해 보내는 예전 방식으로 돌아간다.
+        def _secret(name: str) -> str:
+            try:
+                return str(st.secrets.get(name, "") or "")
+            except Exception:
+                return ""
+
+        registry_keys = (_secret("quantmix_repository"), _secret("github_token"),
+                         _secret("quantmix_state_key"))
+        registry_ready = all(registry_keys)
 
         st.markdown("### 🔔 자동 알림 신청")
         st.caption(
@@ -2191,18 +2206,47 @@ if is_shared_server():
         )
 
         problems = [m for m in (check_person_id(signup_id), check_chat_id(signup_chat)) if m]
-        if st.button("📄 신청 내용 만들기", type="primary", width="stretch"):
+        button_label = "🔔 자동 알림 켜기" if registry_ready else "📄 신청 내용 만들기"
+        if st.button(button_label, type="primary", width="stretch"):
             if problems:
                 for message in problems:
                     st.error(message)
             else:
                 entry = build_signup(signup_id, signup_label, signup_chat, cfg)
-                st.success("아래 내용을 **그대로 복사해서 관리자에게 보내세요.**")
-                st.code(signup_text(entry), language="json")
-                st.caption(
-                    "관리자가 등록하면 **다음 거래일부터** 옵니다. "
-                    "설정을 바꾸고 싶으면 다시 신청서를 만들어 보내면 됩니다."
-                )
+                if registry_ready:
+                    try:
+                        outcome = add_person(*registry_keys, entry)
+                        st.success(
+                            ("**등록했습니다.**" if outcome == "added" else "**설정을 바꿨습니다.**")
+                            + " 다음 거래일부터 이 번호로 주문이 갑니다."
+                        )
+                        st.caption("설정을 바꾸려면 값을 고치고 이 버튼을 다시 누르면 됩니다.")
+                    except CloudError as error:
+                        code = str(error)
+                        st.error({
+                            "REGISTRY_FULL": f"등록 인원이 꽉 찼습니다(최대 {MAX_PEOPLE}명). 관리자에게 문의하세요.",
+                            "REGISTRY_CONFLICT": "이름과 번호가 서로 다른 사람의 것입니다. 이름을 바꿔서 다시 해보세요.",
+                        }.get(code, f"등록하지 못했습니다 — {code}"))
+                else:
+                    # 저장할 곳이 설정돼 있지 않으면 예전 방식으로 돌아간다.
+                    st.success("아래 내용을 **그대로 복사해서 관리자에게 보내세요.**")
+                    st.code(signup_text(entry), language="json")
+                    st.caption("관리자가 등록하면 **다음 거래일부터** 옵니다.")
+
+        if registry_ready:
+            st.divider()
+            st.markdown("#### 알림 끄기")
+            off_chat = st.text_input("끌 번호 (chat_id)", key="signup_off",
+                                     placeholder="123456789",
+                                     help="자기 번호를 넣으면 그 번호로 가던 알림이 멈춥니다.")
+            if st.button("🔕 알림 끄기", width="stretch", disabled=not off_chat):
+                try:
+                    if remove_person(*registry_keys, off_chat.strip()):
+                        st.success("껐습니다. 더 이상 가지 않습니다.")
+                    else:
+                        st.warning("그 번호로 등록된 알림이 없습니다.")
+                except CloudError as error:
+                    st.error(f"끄지 못했습니다 — {error}")
 
         st.divider()
         st.caption(
