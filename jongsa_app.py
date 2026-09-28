@@ -2140,10 +2140,74 @@ with tab_notify:
 
 if is_shared_server():
     with tab_notify:
+        # 공유 서버에서는 봇 토큰을 받지 않는다. 저장할 곳이 없기도 하고,
+        # 토큰은 봇의 비밀번호라 남의 것을 맡으면 안 된다.
+        # 대신 신청서를 글자로 만들어 주고, 등록은 관리자가 한다.
+        from src.quantmix_signup import build_signup, check_chat_id, check_person_id, signup_text
+
+        st.markdown("### 🔔 자동 알림 신청")
+        st.caption(
+            "신청하면 **매일 장 마감 전에 오늘 넣을 주문이 텔레그램으로** 옵니다. "
+            "앱을 열지 않아도 옵니다."
+        )
         st.info(
-            "**여기는 여러 사람이 함께 쓰는 서버라 알림을 설정할 수 없습니다.** "
-            "봇 토큰을 저장하면 다른 접속자와 섞이고, 예약도 이 서버에서는 걸리지 않습니다.\n\n"
-            "알림은 **내 PC에서 켠 앱**에서 설정하세요."
+            "**봇 토큰은 필요 없습니다.** 봇 하나로 여러 사람에게 보낼 수 있어서, "
+            "받는 사람은 자기 **번호(chat_id)** 만 알려주면 됩니다. "
+            "번호는 비밀이 아니라 전화번호 같은 것이라 알려줘도 안전합니다."
+        )
+
+        st.markdown("#### 1단계 — 내 번호 알아내기")
+        bot_name = st.secrets.get("notify_bot", "") if hasattr(st, "secrets") else ""
+        st.markdown(
+            (f"1. 텔레그램에서 **{bot_name}** 를 찾아 `/start` 를 보냅니다.\n"
+             if bot_name else
+             "1. 관리자에게 받은 **봇 이름**을 텔레그램에서 찾아 `/start` 를 보냅니다.\n")
+            + "2. 봇이 답장으로 **내 번호**를 알려줍니다.\n"
+            + "3. 그 번호를 아래에 적으세요."
+        )
+
+        st.markdown("#### 2단계 — 신청 내용 만들기")
+        s1, s2 = st.columns(2)
+        with s1:
+            signup_id = st.text_input(
+                "영문 이름", key="signup_id",
+                help="사람을 구분하는 이름입니다. 영문·숫자만. 한 번 정하면 바꾸지 마세요.",
+                placeholder="minsu",
+            )
+        with s2:
+            signup_label = st.text_input(
+                "한글 이름(표시용)", key="signup_label",
+                help="알림에 '○○ 계좌 기준' 으로 표시됩니다.", placeholder="민수",
+            )
+        signup_chat = st.text_input(
+            "내 번호 (chat_id)", key="signup_chat", placeholder="123456789",
+            help="1단계에서 봇이 알려준 숫자입니다.",
+        )
+
+        st.caption(
+            f"신청에는 **지금 위 탭에서 설정한 값**이 그대로 들어갑니다 — "
+            f"투자금 ${cfg.get('initial_cash', 0):,.0f} · 시작일 {cfg.get('start_date', '')} · "
+            f"{matching_preset_name(cfg)}. 다르게 하려면 먼저 **📅 퀀트믹스 주문** 탭에서 바꾸세요."
+        )
+
+        problems = [m for m in (check_person_id(signup_id), check_chat_id(signup_chat)) if m]
+        if st.button("📄 신청 내용 만들기", type="primary", width="stretch"):
+            if problems:
+                for message in problems:
+                    st.error(message)
+            else:
+                entry = build_signup(signup_id, signup_label, signup_chat, cfg)
+                st.success("아래 내용을 **그대로 복사해서 관리자에게 보내세요.**")
+                st.code(signup_text(entry), language="json")
+                st.caption(
+                    "관리자가 등록하면 **다음 거래일부터** 옵니다. "
+                    "설정을 바꾸고 싶으면 다시 신청서를 만들어 보내면 됩니다."
+                )
+
+        st.divider()
+        st.caption(
+            "**지금 당장 보고 싶다면** 이 앱의 📅 퀀트믹스 주문 탭에 "
+            "오늘 넣을 주문이 이미 나와 있습니다. 알림은 '앱을 안 열어도 오게' 하는 것뿐입니다."
         )
 else:
     with tab_notify:
