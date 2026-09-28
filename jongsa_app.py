@@ -7,6 +7,7 @@
 
 import json
 import sys
+from html import escape as html_escape
 from datetime import date, datetime, timedelta
 from datetime import time as dtime
 from pathlib import Path
@@ -815,19 +816,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 if is_shared_server():
-    # 폰에서는 접는다. 한 번 읽으면 그만인 글이 매번 주문 위를 덮으면
-    # 그게 곧 '쓰기 불편한 앱' 이 된다. 다만 면책 문구는 없애지 않는다.
-    st.markdown('<div class="qm-desktop-only">', unsafe_allow_html=True)
-    st.caption(
-        "SOXL 분할매매 계산기입니다. **투자 자문이 아니고 수익을 보장하지 않습니다.** "
-        "설정은 사람마다 따로 유지됩니다 — **지금 주소를 즐겨찾기 해두면** 다음에 열 때도 "
-        "이 설정 그대로 뜹니다 (주소창을 보면 설정값이 붙어 있습니다)."
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
+    # 폰에서는 짧게, PC 에서는 그대로.
+    #
+    # st.markdown('<div>') 로 여러 요소를 감싸는 방법은 안 된다. 스트림릿이
+    # 요소마다 자기 컨테이너를 만들어서 여는 태그와 닫는 태그가 따로 놀고,
+    # 사이에 낀 것은 감싸지지 않는다. 실제로 그렇게 해봤다가 폰에서 긴
+    # 설명문이 그대로 보였다.
+    #
+    # 그래서 한 덩어리 안에서 두 벌을 같이 그리고 CSS 로 고른다.
     st.markdown(
+        '<div class="qm-desktop-only" style="font-size:0.82rem;opacity:0.75;">'
+        'SOXL 분할매매 계산기입니다. <b>투자 자문이 아니고 수익을 보장하지 않습니다.</b> '
+        '설정은 사람마다 따로 유지됩니다 — <b>지금 주소를 즐겨찾기 해두면</b> 다음에 열 때도 '
+        '이 설정 그대로 뜹니다 (주소창을 보면 설정값이 붙어 있습니다).'
+        '</div>'
         '<div class="qm-mobile-only" style="font-size:0.72rem;opacity:0.6;'
-        'margin:-0.2rem 0 0.4rem 0;">투자 자문이 아니며 수익을 보장하지 않습니다. '
-        '이 주소를 즐겨찾기 해두면 설정이 유지됩니다.</div>',
+        'margin:-0.2rem 0 0.3rem 0;line-height:1.35;">'
+        '투자 자문이 아니며 수익을 보장하지 않습니다. 이 주소를 즐겨찾기 해두면 설정이 유지됩니다.'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -901,11 +907,18 @@ with tab_home:
                 cfg_to_url(cfg, st.session_state.flows)
                 st.rerun()
         # 전략 설명은 고를 때만 필요하다. 폰에서는 접는다.
-        st.markdown('<div class="qm-desktop-only">', unsafe_allow_html=True)
-        st.markdown(f"**쉽게 말하면:** {PRESETS[quick_preset]['설명']}")
-        st.caption(preset_result_caption(PRESETS[quick_preset]))
-        st.caption("SOXL 약 15.5년 · 약 29.5만 설정 조합 · 누적 31만 회 이상 시뮬레이션에서 선별")
-        st.markdown('</div>', unsafe_allow_html=True)
+        # (한 덩어리로 그려야 CSS 로 감쌀 수 있다 — 위 주석 참고)
+        st.markdown(
+            '<div class="qm-desktop-only">'
+            f'<p style="margin:0 0 0.3rem 0;"><b>쉽게 말하면:</b> '
+            f'{html_escape(PRESETS[quick_preset]["설명"])}</p>'
+            f'<p style="font-size:0.82rem;opacity:0.7;margin:0 0 0.2rem 0;">'
+            f'{html_escape(preset_result_caption(PRESETS[quick_preset]))}</p>'
+            '<p style="font-size:0.82rem;opacity:0.7;margin:0;">'
+            'SOXL 약 15.5년 · 약 29.5만 설정 조합 · 누적 31만 회 이상 시뮬레이션에서 선별</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown('<div class="qm-section-title">내 투자 정보 입력</div>', unsafe_allow_html=True)
     # 같은 단계의 입력칸은 같은 폭으로 보여야 우선순위가 동일하게 느껴진다.
@@ -1259,14 +1272,18 @@ if ready:
             + (f" 최대 보유기간 {stop_days}거래일이 아직 지나지 않아 기간종료 매도가 없을 수 있습니다."
                if len(log) <= int(stop_days) else "")
         )
-    # 제목과 안내는 PC 에서만. 폰은 아래 요약 카드가 같은 일을 한다.
-    st.markdown('<div class="qm-desktop-only">', unsafe_allow_html=True)
-    st.markdown("## 오늘 증권사 앱에 입력할 주문")
-    st.info(
-        f"**아래의 빨간색 ‘팔 주문’과 초록색 ‘살 주문’만 확인하면 됩니다.** "
-        f"{price_date:%Y-%m-%d} 종가(\\${price:,.2f})로 계산했으며, 오늘 종가를 미리 알 필요는 없습니다."
+    # 제목과 안내는 PC 에서만. 폰은 위 요약 카드가 같은 일을 한다.
+    # (한 덩어리로 그려야 CSS 로 감쌀 수 있다)
+    st.markdown(
+        '<div class="qm-desktop-only">'
+        '<h2 style="margin:0.4rem 0 0.3rem 0;">오늘 증권사 앱에 입력할 주문</h2>'
+        '<div style="background:rgba(40,110,200,0.12);border:1px solid rgba(60,130,230,0.35);'
+        'border-radius:10px;padding:0.6rem 0.8rem;font-size:0.88rem;">'
+        '<b>아래의 빨간색 ‘팔 주문’과 초록색 ‘살 주문’만 확인하면 됩니다.</b> '
+        f'{price_date:%Y-%m-%d} 종가(${price:,.2f})로 계산했으며, '
+        '오늘 종가를 미리 알 필요는 없습니다.</div></div>',
+        unsafe_allow_html=True,
     )
-    st.markdown('</div>', unsafe_allow_html=True)
 
     # 오늘 종가를 모르는 상태에서 주문을 짠다 (원문 요령: 매수 LOC = 최저 목표가 - 0.01)
     plan_cfg = {**cfg, "_last_close": price}
@@ -1347,8 +1364,8 @@ if ready:
         # qm-m-copy 표시로 카드 바로 아래에 붙게 한다(CSS order).
         st.markdown(
             '<div class="qm-mobile-only qm-m-copy" '
-            'style="font-size:0.7rem;opacity:0.6;margin:0 0 -0.35rem 2px;">'
-            '눌러서 복사</div>',
+            'style="font-size:0.7rem;opacity:0.55;margin:0.15rem 0 0.1rem 3px;">'
+            '아래를 눌러 복사</div>',
             unsafe_allow_html=True,
         )
         st.code(_copy, language=None)
