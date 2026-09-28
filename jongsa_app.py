@@ -1011,6 +1011,27 @@ with tab_home:
         if new_flows != _flows:
             st.session_state.flows = new_flows
             save_flows(new_flows)
+
+            # 입출금이 바뀌면 **아직 안 지난 주문일**의 안내 수량을 버린다.
+            #
+            # 주문 수량은 한 번 보여주면 그날 장부로 고정한다(아래 order_guides).
+            # 이미 증권사에 넣은 주문이 화면에서 슬그머니 바뀌면 안 되기 때문이다.
+            # 그런데 그 규칙이 입금까지 막았다.
+            #
+            # 실제로 그랬다 (2026-09-28). $50,000 를 넣었는데 총자산만 $105,152 로
+            # 늘고 매수 수량은 입금 전 값인 38주에 머물렀다. 맞는 값은 74주였다.
+            # 텔레그램도 같은 기록을 읽어서 같이 틀렸다.
+            #
+            # 지난 날짜는 건드리지 않는다 — 그건 실제로 주문했을 수 있는 기록이다.
+            # 아직 장이 열리지 않은 날만 지워서 새 금액으로 다시 계산되게 한다.
+            _next_open = date.today()
+            while not is_us_market_open(_next_open.isoformat()):
+                _next_open += timedelta(days=1)
+            _kept = [g for g in st.session_state.order_guides if g["날짜"] < _next_open]
+            if len(_kept) != len(st.session_state.order_guides):
+                st.session_state.order_guides = _kept
+                save_order_guides(_kept)
+
             # 재실행이 아래의 공통 cfg_to_url보다 먼저 일어나므로 여기서 보존한다.
             cfg_to_url(cfg, new_flows)
             st.rerun()
