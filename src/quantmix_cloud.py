@@ -198,17 +198,46 @@ def trading_context(now: datetime, *, session_date: date | None = None):
 
 
 def notification_slot(now: datetime, schedule: str = ""):
-    """Resolve each cron independently, rejecting delayed, expired slots."""
+    """지금이 어느 알림 차례인지. 늦게 시작해도 그날 안이면 보낸다.
+
+    ── 왜 '몇 시부터 몇 시' 로 자르지 않는가 ────────────────────────
+    GitHub Actions 의 예약 실행은 정시에 오지 않는다. 서버가 붐비면 몇 시간씩
+    밀린다. 실측 (2026-09-23~29): 15분, 275분, 296분, **475분** 지각.
+
+    예전에는 13시 알림을 13~19시에만, 19시 알림을 19~24시에만 유효하다고 봤다.
+    그래서 6시간 밀린 실행이 전부 'SKIP: notification slot expired' 로 버려졌고,
+    9/28·9/29 이틀 내내 알림이 한 통도 안 왔다.
+
+    늦어도 보내는 것이 안전한 이유: 주문 마감 확인은 trading_context() 가
+    따로 한다. 미국장 마감 10분 전을 넘으면 거기서 막는다. 그러니 여기서
+    시계를 빡빡하게 볼 필요가 없다.
+
+    ── 그래도 지키는 것 ──────────────────────────────────────────────
+    13시 차례가 19시에 또 가면 하루 두 번이 아니라 세 번이 된다. 그래서
+    **차례가 자기 시간보다 앞서 도는 것만** 막는다. 13시 크론이 아침 9시에
+    돌면(그런 일은 없지만) 그건 아직 그 차례가 아니다.
+
+    중복 발송은 slot_sent() 가 막는다. 같은 차례를 두 번 보내지 않는다.
+    """
     if now.tzinfo is None:
         raise CloudError("TIMEZONE_REQUIRED")
     korea = now.astimezone(ZoneInfo("Asia/Seoul"))
-    schedules = {"0 4 * * 1-5": "13:00", "0 10 * * 1-5": "19:00"}
+    # 제시간 크론과, 밀린 것을 따라잡는 매시간 크론.
+    # 따라잡기 크론은 '지금 시각이 어느 차례인가' 로 정한다.
+    schedules = {
+        "0 4 * * 1-5": "13:00",      # 제시간
+        "0 10 * * 1-5": "19:00",     # 제시간
+        "0 5-9 * * 1-5": None,       # 13시 차례를 못 보냈으면 따라잡는다
+        "0 11-13 * * 1-5": None,     # 19시 차례를 못 보냈으면 따라잡는다
+    }
     if schedule:
         if schedule not in schedules:
             raise CloudError("UNKNOWN_NOTIFICATION_SCHEDULE")
         slot = schedules[schedule]
-        if not ((slot == "13:00" and 13 <= korea.hour < 19)
-                or (slot == "19:00" and 19 <= korea.hour < 24)):
+        if slot is None:
+            slot = "13:00" if korea.hour < 19 else "19:00"
+        # 자기 차례 시각 전이면 아직 아니다. 지난 것은 얼마가 지났든 보낸다.
+        elif korea.hour < int(slot.split(":")[0]):
             return None
     else:
         slot = "13:00" if korea.hour < 19 else "19:00"

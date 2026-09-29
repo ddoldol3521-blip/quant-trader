@@ -195,16 +195,62 @@ class CloudTests(unittest.TestCase):
                 now = datetime(day.year, day.month, day.day, hour, tzinfo=ZoneInfo("Asia/Seoul"))
                 self.assertIsNone(trading_context(now, session_date=day))
 
-    def test_delayed_slots_do_not_overlap(self):
+    def test_late_runs_still_deliver(self):
+        """GitHub이 몇 시간 늦게 돌려도 그날 안이면 보낸다.
+
+        예전에는 13시 차례를 13~19시에만 유효하다고 봤다. 그런데 실측상
+        예약 실행이 15~475분 늦게 시작한다(2026-09-23~29). 그래서 6시간
+        밀린 실행이 전부 버려졌고 9/28·9/29 이틀 알림이 한 통도 안 왔다.
+
+        늦어도 보내는 것이 안전한 이유는 주문 마감 확인을 trading_context()
+        가 따로 하기 때문이다. 중복은 slot_sent() 가 막는다.
+        """
         korea = ZoneInfo("Asia/Seoul")
-        self.assertIsNotNone(notification_slot(datetime(2026, 9, 21, 13, 35, tzinfo=korea),
-                                               "0 4 * * 1-5"))
-        self.assertIsNone(notification_slot(datetime(2026, 9, 21, 19, tzinfo=korea),
+        for hour in (13, 15, 19, 22, 23):
+            with self.subTest(hour=hour):
+                got = notification_slot(datetime(2026, 9, 21, hour, tzinfo=korea),
+                                        "0 4 * * 1-5")
+                self.assertIsNotNone(got, f"{hour}시에 13시 차례를 버렸다")
+                self.assertEqual(got[1], "13:00")
+
+    def test_slot_not_delivered_before_its_time(self):
+        """자기 차례 시각보다 앞서 돌면 아직 아니다."""
+        korea = ZoneInfo("Asia/Seoul")
+        self.assertIsNone(notification_slot(datetime(2026, 9, 21, 9, tzinfo=korea),
                                             "0 4 * * 1-5"))
-        self.assertIsNone(notification_slot(datetime(2026, 9, 22, 0, tzinfo=korea),
+        self.assertIsNone(notification_slot(datetime(2026, 9, 21, 18, tzinfo=korea),
                                             "0 10 * * 1-5"))
+
+    def test_catch_up_cron_picks_slot_by_clock(self):
+        """따라잡기 크론은 지금 시각으로 차례를 정한다."""
+        korea = ZoneInfo("Asia/Seoul")
+        for hour, expected in ((14, "13:00"), (18, "13:00"), (20, "19:00"), (23, "19:00")):
+            with self.subTest(hour=hour):
+                _, slot = notification_slot(datetime(2026, 9, 21, hour, tzinfo=korea),
+                                            "0 5-9 * * 1-5")
+                self.assertEqual(slot, expected)
+
+    def test_unknown_schedule_rejected(self):
+        korea = ZoneInfo("Asia/Seoul")
         with self.assertRaises(CloudError):
             notification_slot(datetime(2026, 9, 21, 22, tzinfo=korea), "10 12,13 * * 1-5")
+
+    def test_workflow_crons_are_all_known(self):
+        """워크플로에 적은 크론을 코드가 전부 알아야 한다.
+
+        하나라도 모르면 그 실행은 UNKNOWN_NOTIFICATION_SCHEDULE 로 죽는다.
+        워크플로만 고치고 코드를 안 고치는 실수를 여기서 잡는다.
+        """
+        import re
+        from pathlib import Path
+        text = (Path(__file__).resolve().parent.parent
+                / ".github" / "workflows" / "jongsa-daily.yml").read_text(encoding="utf-8")
+        crons = re.findall(r'- cron: "([^"]+)"', text)
+        self.assertTrue(crons, "워크플로에서 cron 을 못 찾았다")
+        now = datetime(2026, 9, 21, 20, tzinfo=ZoneInfo("Asia/Seoul"))
+        for cron in crons:
+            with self.subTest(cron=cron):
+                notification_slot(now, cron)   # 모르면 CloudError 로 터진다
 
     def test_two_slots_send_once_each_and_reuse_original_order(self):
         from unittest.mock import Mock
